@@ -2,10 +2,10 @@
 A hid proxy solution using ESP32C3 and CH9329/CH9328
 
 * Solution
-** hardware
-** software
+I use ESP32C3 as the BLE controller to connect to the keyboard, control LED and store connected bluetooth device addr. And CH9329/CH9328 is used to simulate keyboard.
 
 * Features
+- hid proxy for any bluetooth keyboard (with 1812)
 - Remember connected keyboard
 - LED signals to illustrate connection mode
 
