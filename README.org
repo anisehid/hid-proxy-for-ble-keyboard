@@ -1,0 +1,14 @@
+
+A hid proxy solution using ESP32C3 and CH9329/CH9328
+
+* Solution
+** hardware
+** software
+
+* Features
+- Remember connected keyboard
+- LED signals to illustrate connection mode
+
+* Usage
+
+* Todos
