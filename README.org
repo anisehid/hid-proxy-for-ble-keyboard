@@ -1,5 +1,5 @@
 
-A hid proxy solution using ESP32C3 and CH9329/CH9328
+A hid proxy using ESP32C3 and CH9329/CH9328
 
 * Solution
 I use ESP32C3 as the BLE controller to connect to the keyboard, control LED and store connected bluetooth device addr. And CH9329/CH9328 is used to simulate keyboard.
@@ -9,6 +9,24 @@ I use ESP32C3 as the BLE controller to connect to the keyboard, control LED and 
 - Remember connected keyboard
 - LED signals to illustrate connection mode
 
+* Build and flash
+Install esp idf
+see some link
+
+set target to esp32c3
+
+  #+begin_src bash
+idf.py set-target esp32c3
+  #+end_src
+
+Then, build and flash to your hid proxy using serial port dev/ttyUSB0. With monitor, you can start monitor after flashing, use Ctrl-] to stop monitor and release the port.
+
+#+begin_src bash
+idf.py -p /dev/ttyUSB0 -b 115200 flash monitor
+#+end_src
+
 * Usage
 
 * Todos
+- Support store multiple devices and swith with an extra button
+- Support ble mouse with ch9329
