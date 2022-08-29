@@ -10,7 +10,7 @@ This was tested on following keyboards:
 
   Criteria for available devices:
   1. UUID is 0x1812 while parsing with ESP_BLE_AD_TYPE_16SRV_PART
-  2. Apprearence equals to *ESP_BLE_APPEARANCE_HID_KEYBOARD (0x03C1)*
+  2. Apprearence equals to ESP_BLE_APPEARANCE_HID_KEYBOARD (0x03C1)
   3. The first scanned device will be selected
 
 - Remember connected keyboard: Use nvs_flash to store one bluetooth device address. Once this is set, hid host will skip other devices.
