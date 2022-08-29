@@ -23,15 +23,6 @@
  * sizeof(scan_result)(4B) scan_result
  * sizeof(scan_result)(4B) scan_result
  **/
-
-/* esp_err_t save_ble_results(uint8_t *results); */
-
-/* esp_err_t read_ble_results(uint8_t *results); */
-
-/* esp_err_t set_ble_status(int32_t status); */
-
-/* int32_t get_ble_status(); */
-
 esp_err_t init_nvs_flash();
 
 // save a new ble device

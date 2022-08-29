@@ -121,9 +121,6 @@ void esp_hid_scan_results_free(esp_hid_scan_result_t *results) {
   while (results) {
     r = results;
     results = results->next;
-    /* if (r->name != NULL) { */
-    /*   free((char *)r->name); */
-    /* } */
     free(r);
   }
 }
@@ -199,7 +196,7 @@ handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst) {
   char name[64] = {0};
 
   uint8_t uuid_len = 0;
-  // lhy: change 16SRV to 32SRV
+  /// Note: change 16SRV to 32SRV
   uint8_t *uuid_d = esp_ble_resolve_adv_data(
       scan_rst->ble_adv, ESP_BLE_AD_TYPE_16SRV_PART, &uuid_len);
   if (uuid_d != NULL && uuid_len) {

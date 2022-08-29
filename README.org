@@ -1,17 +1,27 @@
 
-A hid proxy using ESP32C3 and CH9329/CH9328
+A hid proxy using ESP32C3 and CH9329/CH9328. ESP32C3 responds for BLE hosting, LED controling and storing connected bluetooth device addr with nvs_flash. And CH9329/CH9328 is used to simulate keyboard.
 
-* Solution
-I use ESP32C3 as the BLE controller to connect to the keyboard, control LED and store connected bluetooth device addr. And CH9329/CH9328 is used to simulate keyboard.
+This was tested on following keyboards:
+- zmk based keyboards
+- niz keyboard
 
 * Features
-- hid proxy for any bluetooth keyboard (with 1812)
-- Remember connected keyboard
-- LED signals to illustrate connection mode
+- hid proxy for bluetooth keyboard: Scan and connect to BLE keyboards. The code is modified based on the official example: https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/esp_hid_host
+
+  Criteria for available devices:
+  1. UUID is 0x1812 while parsing with ESP_BLE_AD_TYPE_16SRV_PART
+  2. Apprearence equals to *ESP_BLE_APPEARANCE_HID_KEYBOARD (0x03C1)*
+  3. The first scanned device will be selected
+
+- Remember connected keyboard: Use nvs_flash to store one bluetooth device address. Once this is set, hid host will skip other devices.
+- LED signals to illustrate connection mode. There are three LED mode:
+  - *Rapid blink mode*: Scan for new device.
+  - *Slow blink mode*: Scan for known device.
+  - *Always on*: Connected.
+- Relay the keyboard's input to CH9328/CH9329
 
 * Build and flash
-Install esp idf
-see some link
+Install esp idf: https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/index.html
 
 set target to esp32c3
 
@@ -26,7 +36,15 @@ idf.py -p /dev/ttyUSB0 -b 115200 flash monitor
 #+end_src
 
 * Usage
+- *Connect to new device*: if no device is ever connected, the led should be blink rapidly as the esp32c3 is scanning available keyboards. A few moments later, the first scanned device will be connected, and the LED mode should be switched to always on. This device will be stored to esp32c3.
+- *Connect to known device*: If no device is connected and there exists a bluetooth device address (esp_bd_addr_t) stored in esp32c3's nvs_flash. The LED will blink slowly while the esp32c3 scanning the known keyboard.
+- *Erase known device*: Press the boot button (IO9) for at lease one second, until the led turns into rapid blink mode.
+
+* Known issues
+- Crash if the opened keyboard is already connected to another hid_proxy.
+- LED mode change delay after pressing the boot button to erase.
 
 * Todos
-- Support store multiple devices and swith with an extra button
+- Storing multiple devices and swithing with an extra button
 - Support ble mouse with ch9329
+- Refactor the code to be more robust
