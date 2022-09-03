@@ -47,4 +47,5 @@ idf.py -p /dev/ttyUSB0 -b 115200 flash monitor
 * Todos
 - Storing multiple devices and swithing with an extra button
 - Support ble mouse with ch9329
-- Refactor the code to be more robust
+- Refactor the code to make it more robust
+- start a web server for keyboad connecting, this is useful when you have multiple keyboards
