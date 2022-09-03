@@ -17,7 +17,7 @@ This was tested on following keyboards:
 - LED signals to illustrate connection mode. There are three LED mode:
   - *Rapid blink mode*: Scan for new device.
   - *Slow blink mode*: Scan for known device.
-  - *Always on*: Connected.
+  - *Off*: Connected.
 - Relay the keyboard's input to CH9328/CH9329
 
 * Build and flash
@@ -36,8 +36,8 @@ idf.py -p /dev/ttyUSB0 -b 115200 flash monitor
 #+end_src
 
 * Usage
-- *Connect to new device*: if no device is ever connected, the led should be blink rapidly as the esp32c3 is scanning available keyboards. A few moments later, the first scanned device will be connected, and the LED mode should be switched to always on. This device will be stored to esp32c3.
-- *Connect to known device*: If no device is connected and there exists a bluetooth device address (esp_bd_addr_t) stored in esp32c3's nvs_flash. The LED will blink slowly while the esp32c3 scanning the known keyboard.
+- *Connect to new device*: if no device is stored, esp32c3 will start scanning available keyboards, and led will turn into rapid blink mode. The scanning may take a few seconds. After connecting to the first scanned device, led will tuen into off mode. And the connected device is stored.
+- *Connect to known device*: If no device is connected and there exists a bluetooth device address (esp_bd_addr_t) stored in esp32c3's nvs_flash. The LED will try scan this recorded device, and tune led into slow blink mode.
 - *Erase known device*: Press the boot button (IO9) for at lease one second, until the led turns into rapid blink mode.
 
 * Known issues
