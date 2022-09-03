@@ -3,7 +3,6 @@ A hid proxy using ESP32C3 and CH9329/CH9328. ESP32C3 responds for BLE hosting, L
 
 This was tested on following keyboards:
 - zmk based keyboards
-- niz keyboard
 
 * Features
 - hid proxy for bluetooth keyboard: Scan and connect to BLE keyboards. The code is modified based on the official example: https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/esp_hid_host
