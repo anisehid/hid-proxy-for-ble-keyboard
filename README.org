@@ -7,10 +7,11 @@ This was tested on following keyboards:
 * Features
 - hid proxy for bluetooth keyboard: Scan and connect to BLE keyboards. The code is modified based on the official example: https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/esp_hid_host
 
-  Criteria for available devices:
+  Which device will be selected:
   1. UUID is 0x1812 while parsing with ESP_BLE_AD_TYPE_16SRV_PART
   2. Apprearence equals to ESP_BLE_APPEARANCE_HID_KEYBOARD (0x03C1)
   3. The first scanned device will be selected
+  4. No authentication is required
 
 - Remember connected keyboard: Use nvs_flash to store one bluetooth device address. Once this is set, hid host will skip other devices.
 - LED signals to illustrate connection mode. There are three LED mode:
