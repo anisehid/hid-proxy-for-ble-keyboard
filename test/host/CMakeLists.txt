@@ -12,8 +12,10 @@ add_executable(run_tests
     runner.c
     test_ch9329_pack.c
     test_led_duty.c
+    test_button_gesture.c
     ${MAIN_DIR}/ch9329_pack.c
     ${MAIN_DIR}/led_duty.c
+    ${MAIN_DIR}/button_gesture.c
     ${VENDOR_DIR}/unity.c
 )
 
