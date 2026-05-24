@@ -31,7 +31,8 @@ static size_t num_ble_scan_results = 0;
 static SemaphoreHandle_t ble_hidh_cb_semaphore = NULL;
 
 #define BLE_CB_TIMEOUT_MS 3000
-#define WAIT_BLE_CB() xSemaphoreTake(ble_hidh_cb_semaphore, pdMS_TO_TICKS(BLE_CB_TIMEOUT_MS))
+#define WAIT_BLE_CB()           xSemaphoreTake(ble_hidh_cb_semaphore, pdMS_TO_TICKS(BLE_CB_TIMEOUT_MS))
+#define WAIT_BLE_SCAN_CB(secs)  xSemaphoreTake(ble_hidh_cb_semaphore, pdMS_TO_TICKS((secs) * 1000 + 2000))
 #define SEND_BLE_CB() xSemaphoreGive(ble_hidh_cb_semaphore)
 
 #define SIZEOF_ARRAY(a) (sizeof(a) / sizeof(*a))
@@ -484,8 +485,17 @@ esp_err_t esp_hid_scan(uint32_t seconds, size_t *num_results,
   stored_addr = st_addr;
 
   if (start_ble_scan(seconds) == ESP_OK) {
-    if (WAIT_BLE_CB() != pdTRUE) {
+    if (WAIT_BLE_SCAN_CB(seconds) != pdTRUE) {
       ESP_LOGW(TAG, "BLE scan completion timed out, retrying");
+      esp_ble_gap_stop_scanning();
+      // Drain a late completion callback (best-effort, short wait).
+      xSemaphoreTake(ble_hidh_cb_semaphore, pdMS_TO_TICKS(500));
+      // Discard any partial results so the next call starts clean.
+      if (ble_scan_results != NULL) {
+        esp_hid_scan_results_free(ble_scan_results);
+        ble_scan_results = NULL;
+      }
+      num_ble_scan_results = 0;
       return ESP_ERR_TIMEOUT;
     }
   } else {
