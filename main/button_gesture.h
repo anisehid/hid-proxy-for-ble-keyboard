@@ -27,7 +27,7 @@ typedef struct {
 } gesture_ctx_t;
 
 #define GESTURE_TAP_MAX_US      (300LL * 1000)         // <=300 ms = tap
-#define GESTURE_TAP_WINDOW_US   (500LL * 1000)         // <=500 ms between taps
+#define GESTURE_TAP_WINDOW_US   (500LL * 1000)         // <500 ms between taps
 #define GESTURE_HOLD_1S_US      (1000LL * 1000)        // >=1 s = forget
 #define GESTURE_HOLD_5S_US      (5000LL * 1000)        // >=5 s = factory reset
 
