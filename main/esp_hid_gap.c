@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -174,7 +175,7 @@ void print_uuid(esp_bt_uuid_t *uuid) {
   if (uuid->len == ESP_UUID_LEN_16) {
     GAP_DBG_PRINTF("UUID16: 0x%04x", uuid->uuid.uuid16);
   } else if (uuid->len == ESP_UUID_LEN_32) {
-    GAP_DBG_PRINTF("UUID32: 0x%08x", uuid->uuid.uuid32);
+    GAP_DBG_PRINTF("UUID32: 0x%08" PRIx32, uuid->uuid.uuid32);
   } else if (uuid->len == ESP_UUID_LEN_128) {
     GAP_DBG_PRINTF(
         "UUID128: "
@@ -315,7 +316,7 @@ static void ble_gap_event_handler(esp_gap_ble_cb_event_t event,
     // The app will receive this evt when the IO has Output capability and the
     // peer device IO has Input capability. Show the passkey number to the user
     // to input it in the peer device.
-    ESP_LOGI(TAG, "BLE GAP PASSKEY_NOTIF passkey:%d",
+    ESP_LOGI(TAG, "BLE GAP PASSKEY_NOTIF passkey:%" PRIu32,
              param->ble_security.key_notif.passkey);
     break;
 
@@ -324,7 +325,7 @@ static void ble_gap_event_handler(esp_gap_ble_cb_event_t event,
     // and the peer device IO also has DisplayYesNo capability. show the passkey
     // number to the user to confirm it with the number displayed by peer
     // device.
-    ESP_LOGI(TAG, "BLE GAP NC_REQ passkey:%d",
+    ESP_LOGI(TAG, "BLE GAP NC_REQ passkey:%" PRIu32,
              param->ble_security.key_notif.passkey);
     esp_ble_confirm_reply(param->ble_security.key_notif.bd_addr, true);
     break;
