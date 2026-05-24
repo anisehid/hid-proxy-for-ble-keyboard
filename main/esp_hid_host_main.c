@@ -33,6 +33,7 @@
 #include "device_store.h"
 #include "esp_hid_gap.h"
 #include "esp_hidh.h"
+#include "runtime_mode.h"
 #include "storage.h"
 
 #define BLE_STATUS_CONNECTED  1
@@ -188,10 +189,13 @@ void hid_connect(void *pvParameters) {
     device_entry_t saved[DEVICE_STORE_MAX];
     int saved_count = device_store_list(saved);
 
-    if (saved_count > 0) {
-      set_led_mode(BLE_SCAN_SAVED_LED_MODE);
-    } else {
-      set_led_mode(BLE_SCAN_NEW_LED_MODE);
+    // Skip LED writes when in ADMIN — the admin transition owns the LED pattern.
+    if (runtime_mode_get() != RUNTIME_MODE_ADMIN) {
+      if (saved_count > 0) {
+        set_led_mode(BLE_SCAN_SAVED_LED_MODE);
+      } else {
+        set_led_mode(BLE_SCAN_NEW_LED_MODE);
+      }
     }
     // Scan without an address filter — we filter results against saved[] below.
     esp_hid_scan(SCAN_DURATION_SECONDS, &results_len, &results, NULL);
