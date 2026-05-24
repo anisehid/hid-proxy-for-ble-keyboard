@@ -6,7 +6,8 @@ set(srcs "esp_hid_host_main.c"
          "led_duty.c"
          "storage.c"
          "device_store.c"
-         "button_gesture.c")
+         "button_gesture.c"
+         "runtime_mode.c")
 set(include_dirs ".")
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
