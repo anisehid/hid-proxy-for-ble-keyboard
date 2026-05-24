@@ -30,7 +30,8 @@ static size_t num_ble_scan_results = 0;
 
 static SemaphoreHandle_t ble_hidh_cb_semaphore = NULL;
 
-#define WAIT_BLE_CB() xSemaphoreTake(ble_hidh_cb_semaphore, portMAX_DELAY)
+#define BLE_CB_TIMEOUT_MS 3000
+#define WAIT_BLE_CB() xSemaphoreTake(ble_hidh_cb_semaphore, pdMS_TO_TICKS(BLE_CB_TIMEOUT_MS))
 #define SEND_BLE_CB() xSemaphoreGive(ble_hidh_cb_semaphore)
 
 #define SIZEOF_ARRAY(a) (sizeof(a) / sizeof(*a))
@@ -158,12 +159,10 @@ static void add_ble_scan_result(esp_bd_addr_t bda,
   r->ble.addr_type = addr_type;
   r->usage = esp_hid_usage_from_appearance(appearance);
   r->rssi = rssi;
-  // set name length to max: 64
-  name_len = (name_len > NAME_LEN_MAX) ? NAME_LEN_MAX : name_len;
-  if (memcpy(r->name, name, name_len) == NULL) {
-    ESP_LOGE(TAG, "Copy name failed");
-    return;
+  if (name_len > NAME_LEN_MAX) {
+    name_len = NAME_LEN_MAX;
   }
+  memcpy(r->name, name, name_len);
   r->name[name_len] = 0;
 
   r->next = ble_scan_results;
@@ -377,7 +376,10 @@ static esp_err_t start_ble_scan(uint32_t seconds) {
     ESP_LOGE(TAG, "esp_ble_gap_set_scan_params failed: %d", ret);
     return ret;
   }
-  WAIT_BLE_CB();
+  if (WAIT_BLE_CB() != pdTRUE) {
+    ESP_LOGW(TAG, "BLE scan param-set timed out, retrying");
+    return ESP_ERR_TIMEOUT;
+  }
 
   if ((ret = esp_ble_gap_start_scanning(seconds)) != ESP_OK) {
     ESP_LOGE(TAG, "esp_ble_gap_start_scanning failed: %d", ret);
@@ -482,7 +484,10 @@ esp_err_t esp_hid_scan(uint32_t seconds, size_t *num_results,
   stored_addr = st_addr;
 
   if (start_ble_scan(seconds) == ESP_OK) {
-    WAIT_BLE_CB();
+    if (WAIT_BLE_CB() != pdTRUE) {
+      ESP_LOGW(TAG, "BLE scan completion timed out, retrying");
+      return ESP_ERR_TIMEOUT;
+    }
   } else {
     return ESP_FAIL;
   }
