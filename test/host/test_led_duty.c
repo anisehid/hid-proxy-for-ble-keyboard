@@ -36,10 +36,40 @@ static void test_unknown_mode_defaults_dim(void) {
     TEST_ASSERT_EQUAL_INT(LED_DUTY_DIME, led_duty_for(-1, 5));
 }
 
+static void test_admin_first_pulse(void) {
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 0));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 1));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_DIME, led_duty_for(LED_MODE_ADMIN, 2));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_DIME, led_duty_for(LED_MODE_ADMIN, 3));
+}
+
+static void test_admin_second_pulse(void) {
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 4));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 5));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_DIME, led_duty_for(LED_MODE_ADMIN, 6));
+}
+
+static void test_admin_long_dark(void) {
+    for (int t = 6; t < 40; ++t) {
+        TEST_ASSERT_EQUAL_INT(LED_DUTY_DIME, led_duty_for(LED_MODE_ADMIN, t));
+    }
+}
+
+static void test_admin_period_repeats(void) {
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 40));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 41));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_ON,   led_duty_for(LED_MODE_ADMIN, 44));
+    TEST_ASSERT_EQUAL_INT(LED_DUTY_DIME, led_duty_for(LED_MODE_ADMIN, 46));
+}
+
 void run_led_duty_tests(void) {
     RUN_TEST(test_off_is_always_dim);
     RUN_TEST(test_always_on_is_always_on);
     RUN_TEST(test_fast_blink_toggles_every_two_ticks);
     RUN_TEST(test_slow_blink_toggles_every_twenty_ticks);
     RUN_TEST(test_unknown_mode_defaults_dim);
+    RUN_TEST(test_admin_first_pulse);
+    RUN_TEST(test_admin_second_pulse);
+    RUN_TEST(test_admin_long_dark);
+    RUN_TEST(test_admin_period_repeats);
 }
