@@ -188,10 +188,12 @@ void hid_connect(void *pvParameters) {
         case WEB_CMD_START_DISCOVERY:
           s_discovery_enabled = true;
           s_disc_count = 0;
+          ESP_LOGI(TAG, "DISCOVERY: ON");
           break;
         case WEB_CMD_STOP_DISCOVERY:
           s_discovery_enabled = false;
           s_disc_count = 0;
+          ESP_LOGI(TAG, "DISCOVERY: OFF");
           break;
         case WEB_CMD_CONNECT: {
           esp_hid_scan_result_t fake = {0};
@@ -220,8 +222,16 @@ void hid_connect(void *pvParameters) {
     }
 #endif
 
+    bool in_admin = (runtime_mode_get() == RUNTIME_MODE_ADMIN);
+
     if (ble_status.status == BLE_STATUS_CONNECTED) {
-      continue;
+      // While connected, keep relaying keystrokes. EXCEPT: if the user
+      // has explicitly enabled discovery (in ADMIN), we need to scan to
+      // collect candidates for the picker — that's the whole point of
+      // discovery. Allow it through.
+      if (!(in_admin && s_discovery_enabled)) {
+        continue;
+      }
     }
 
     if (ble_status.status == BLE_STATUS_CONNECTING) {
@@ -234,7 +244,8 @@ void hid_connect(void *pvParameters) {
 
     size_t results_len = 0;
     esp_hid_scan_result_t *results = NULL;
-    ESP_LOGI(TAG, "SCAN...");
+    ESP_LOGI(TAG, "SCAN (admin=%d, discovery=%d, ble=%d)",
+             in_admin, (int)s_discovery_enabled, (int)ble_status.status);
 
     device_entry_t saved[DEVICE_STORE_MAX];
     int saved_count = device_store_list(saved);
@@ -281,6 +292,8 @@ void hid_connect(void *pvParameters) {
               memcpy(e->name, r->name, nl);
               e->name[nl]   = 0;
               e->seen_at_us = esp_timer_get_time();
+              ESP_LOGI(TAG, "DISCOVERY+ " ESP_BD_ADDR_STR " '%s' rssi=%d",
+                       ESP_BD_ADDR_HEX(r->bda), e->name, r->rssi);
             }
           }
           // Do not auto-connect to unsaved devices. ADMIN+discovery surfaces
