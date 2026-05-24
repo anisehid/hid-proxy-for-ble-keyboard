@@ -1,6 +1,7 @@
 #include "storage.h"
 #include "esp_bt_defs.h"
 #include "esp_err.h"
+#include "esp_gap_ble_api.h"
 #include "esp_hid_gap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
@@ -8,8 +9,10 @@
 #include "nvs.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static SemaphoreHandle_t sema_handle = NULL;
+static bool g_need_bond_wipe = false;
 
 static int32_t get_ble_status() {
   nvs_handle_t my_handle;
@@ -133,16 +136,80 @@ bool read_ble_device(uint8_t *mac_addr) {
 }
 
 esp_err_t init_nvs_flash() {
-  esp_err_t ret;
-  ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+  esp_err_t ret = nvs_flash_init();
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     ESP_ERROR_CHECK(nvs_flash_erase());
     ret = nvs_flash_init();
   }
+  if (ret != ESP_OK) {
+    return ret;
+  }
 
   vSemaphoreCreateBinary(sema_handle);
-  return ret;
+
+  // Phase 1 of first-boot migration: if schema_version is missing from the new
+  // namespace, erase the old "storage" namespace and remember to wipe bonds in
+  // phase 2 (which requires Bluedroid to be up — see storage_complete_migration).
+  nvs_handle_t h;
+  esp_err_t open_err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &h);
+  if (open_err == ESP_OK) {
+    int32_t schema = 0;
+    esp_err_t get_err = nvs_get_i32(h, SCHEMA_VERSION_KEY, &schema);
+    nvs_close(h);
+    if (get_err == ESP_OK && schema == SCHEMA_VERSION_VAL) {
+      g_need_bond_wipe = false;
+      return ESP_OK;
+    }
+  }
+
+  // Either the new namespace didn't open or schema_version was missing/wrong:
+  // wipe the old namespace and mark phase 2 needed.
+  nvs_handle_t old_h;
+  if (nvs_open(STORAGE_OLD_NAMESPACE, NVS_READWRITE, &old_h) == ESP_OK) {
+    nvs_erase_all(old_h);
+    nvs_commit(old_h);
+    nvs_close(old_h);
+  }
+  g_need_bond_wipe = true;
+  printf("storage: first-boot phase 1: erased old NVS namespace\n");
+  return ESP_OK;
+}
+
+esp_err_t storage_complete_migration(void) {
+  if (!g_need_bond_wipe) {
+    return ESP_OK;
+  }
+
+  int dev_num = esp_ble_get_bond_device_num();
+  if (dev_num > 0) {
+    esp_ble_bond_dev_t *bond_list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * dev_num);
+    if (bond_list == NULL) {
+      return ESP_ERR_NO_MEM;
+    }
+    esp_ble_get_bond_device_list(&dev_num, bond_list);
+    for (int i = 0; i < dev_num; ++i) {
+      esp_ble_remove_bond_device(bond_list[i].bd_addr);
+    }
+    free(bond_list);
+  }
+
+  nvs_handle_t h;
+  esp_err_t err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &h);
+  if (err != ESP_OK) {
+    return err;
+  }
+  err = nvs_set_i32(h, SCHEMA_VERSION_KEY, SCHEMA_VERSION_VAL);
+  if (err == ESP_OK) {
+    err = nvs_commit(h);
+  }
+  nvs_close(h);
+
+  if (err == ESP_OK) {
+    g_need_bond_wipe = false;
+    printf("storage: first-boot phase 2: erased %d bonds, schema_version=%d\n",
+           dev_num, SCHEMA_VERSION_VAL);
+  }
+  return err;
 }
 
 bool clear_ble_devices() {
