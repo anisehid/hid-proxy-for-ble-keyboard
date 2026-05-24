@@ -75,6 +75,16 @@ int hid_discovery_snapshot(disc_entry_t *out, int max) {
 
 bool hid_discovery_is_enabled(void) { return s_discovery_enabled; }
 
+bool hid_connected_bda(uint8_t out[6]) {
+  if (!connected_dev || !esp_hidh_dev_exists(connected_dev)) return false;
+  const uint8_t *bda = esp_hidh_dev_bda_get(connected_dev);
+  if (!bda) return false;
+  memcpy(out, bda, 6);
+  return true;
+}
+
+int hid_ble_status(void) { return ble_status.status; }
+
 void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
                    void *event_data) {
   esp_hidh_event_t event = (esp_hidh_event_t)id;
