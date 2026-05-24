@@ -4,7 +4,9 @@ set(srcs "esp_hid_host_main.c"
          "ch9329_pack.c"
          "led.c"
          "led_duty.c"
-         "storage.c")
+         "storage.c"
+         "device_store.c"
+         "button_gesture.c")
 set(include_dirs ".")
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"

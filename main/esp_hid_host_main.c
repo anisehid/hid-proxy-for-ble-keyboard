@@ -30,6 +30,7 @@
 #include "led.h"
 #include "nvs_flash.h"
 
+#include "device_store.h"
 #include "esp_hid_gap.h"
 #include "esp_hidh.h"
 #include "storage.h"
@@ -67,7 +68,13 @@ void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
                esp_hidh_dev_name_get(param->open.dev));
       esp_hidh_dev_dump(param->open.dev, stdout);
 
-      save_ble_device((uint8_t *)bda);
+      device_entry_t entry = {0};
+      memcpy(entry.bda, bda, 6);
+      entry.addr_type = 0;  // re-determined from live scan on reconnect
+      const char *name = esp_hidh_dev_name_get(param->open.dev);
+      if (name) snprintf(entry.name, DEVICE_NAME_LEN, "%s", name);
+      device_store_upsert(&entry);
+
       set_led_mode(BLE_CONNECTED_LED_MODE);
       ble_status.status = BLE_STATUS_CONNECTED;
       connected_dev = param->open.dev;
@@ -178,18 +185,16 @@ void hid_connect(void *pvParameters) {
     esp_hid_scan_result_t *results = NULL;
     ESP_LOGI(TAG, "SCAN...");
 
-    esp_bd_addr_t addr;
-    memset(addr, 0, sizeof(esp_bd_addr_t));
-    bool has_con_dev = read_ble_device(addr);
-    if (has_con_dev) {
-      ESP_LOGI(TAG, "FOUND SAVED BLE DEVICE: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(addr));
+    device_entry_t saved[DEVICE_STORE_MAX];
+    int saved_count = device_store_list(saved);
+
+    if (saved_count > 0) {
       set_led_mode(BLE_SCAN_SAVED_LED_MODE);
-      esp_hid_scan(SCAN_DURATION_SECONDS, &results_len, &results, addr);
     } else {
-      ESP_LOGI(TAG, "TRY CONNECT TO NEW BLE DEVICE");
       set_led_mode(BLE_SCAN_NEW_LED_MODE);
-      esp_hid_scan(SCAN_DURATION_SECONDS, &results_len, &results, NULL);
     }
+    // Scan without an address filter — we filter results against saved[] below.
+    esp_hid_scan(SCAN_DURATION_SECONDS, &results_len, &results, NULL);
 
     ESP_LOGI(TAG, "SCAN: %u results", results_len);
     if (results_len) {
@@ -197,6 +202,13 @@ void hid_connect(void *pvParameters) {
       esp_hid_scan_result_t *r = results;
       while (r) {
         print_esp_hid_scan_results(r);
+
+        if (saved_count > 0 && !device_store_contains(r->bda)) {
+          // Not a saved device. In Task 11 we'll honor a "discovery"
+          // toggle; for now (RELAY only) ignore unsaved candidates.
+          r = r->next;
+          continue;
+        }
 
         bool backoff_active =
             (memcmp(r->bda, s_failed_bda, sizeof(esp_bd_addr_t)) == 0) &&
@@ -251,8 +263,12 @@ static esp_err_t init() {
 
 static bool disconnect_device() {
   ESP_LOGI(TAG, "Remove device!");
-  // clear stored status
-  bool ret = clear_ble_devices();
+  // Forget the currently-connected device (if any) from the store.
+  bool ret = true;
+  if (esp_hidh_dev_exists(connected_dev)) {
+    const uint8_t *bda = esp_hidh_dev_bda_get(connected_dev);
+    ret = device_store_remove(bda);
+  }
   ESP_LOGI(TAG, "Set ble status to scan");
   ble_status.status = BLE_STATUS_SCAN;
   // set blink status
