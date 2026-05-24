@@ -23,18 +23,14 @@ typedef struct _LEDMessage {
 
 void ledc_init(void);
 
-// change led if update_led == true
-// after setting, set update_led to false
+// FreeRTOS task: drive the LED according to the current mode.
 void change_led(void *);
 
-// set led mode to m and set update_led to true
+// Set the LED mode (thread-safe).
 bool set_led_mode(int m);
 
-// set update_led to x
-bool set_update_led(bool x);
-
-// return current led mode and update_led
-bool get_led_mode(int *mode, bool *update_led);
+// Read the current LED mode (thread-safe).
+bool get_led_mode(int *mode);
 
 void print_led_mode(int mode);
 
