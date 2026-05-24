@@ -217,13 +217,18 @@ static esp_err_t h_devices_list(httpd_req_t *req) {
     char body[1024];
     int off = snprintf(body, sizeof body, "[");
     for (int i = 0; i < n; ++i) {
+        if (off >= (int)sizeof body - 1) break;
         const uint8_t *m = devs[i].bda;
         off += snprintf(body + off, sizeof body - off,
             "%s{\"slot\":%d,\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
             "\"name\":\"%.7s\"}",
             i ? "," : "", i, m[0], m[1], m[2], m[3], m[4], m[5], devs[i].name);
     }
-    snprintf(body + off, sizeof body - off, "]");
+    if (off < (int)sizeof body - 1) {
+        snprintf(body + off, sizeof body - off, "]");
+    } else {
+        body[sizeof body - 1] = 0;
+    }
     return send_json(req, 200, body);
 }
 
@@ -231,12 +236,21 @@ static esp_err_t h_devices_delete(httpd_req_t *req) {
     if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
     touch_activity();
     // URL: /api/devices/<slot>
-    const char *uri = req->uri;
-    const char *slot_str = strrchr(uri, '/');
-    if (!slot_str) return send_json(req, 400, "{\"error\":\"bad_uri\"}");
-    int slot = atoi(slot_str + 1);
-    if (slot < 0 || slot >= DEVICE_STORE_MAX)
+    static const char prefix[] = "/api/devices/";
+    if (strncmp(req->uri, prefix, sizeof(prefix) - 1) != 0)
+        return send_json(req, 400, "{\"error\":\"bad_uri\"}");
+    const char *slot_str = req->uri + sizeof(prefix) - 1;
+    if (*slot_str == '\0')
         return send_json(req, 400, "{\"error\":\"bad_slot\"}");
+    // Slot must be a pure non-negative integer with no trailing characters.
+    int slot = 0;
+    for (const char *p = slot_str; *p; ++p) {
+        if (*p < '0' || *p > '9')
+            return send_json(req, 400, "{\"error\":\"bad_slot\"}");
+        slot = slot * 10 + (*p - '0');
+        if (slot >= DEVICE_STORE_MAX)
+            return send_json(req, 400, "{\"error\":\"bad_slot\"}");
+    }
     device_entry_t devs[DEVICE_STORE_MAX];
     int n = device_store_list(devs);
     if (slot >= n) return send_json(req, 404, "{\"error\":\"empty\"}");
