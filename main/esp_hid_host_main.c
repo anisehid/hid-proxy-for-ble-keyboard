@@ -201,7 +201,10 @@ void hid_connect(void *pvParameters) {
           break;
         }
         case WEB_CMD_SHUTDOWN_AP:
-          // handled in Task 12
+          runtime_mode_set(RUNTIME_MODE_RELAY);
+          set_led_mode(LED_MODE_OFF);
+          web_server_stop();
+          wifi_ap_stop();
           break;
         }
       }

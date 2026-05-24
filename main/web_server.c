@@ -3,10 +3,14 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "runtime_mode.h"
 #include "storage.h"
 #include "web_auth.h"
+#include "wifi_ap.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -327,6 +331,31 @@ static esp_err_t h_devices_delete(httpd_req_t *req) {
     return send_json(req, 204, "");
 }
 
+static esp_err_t h_shutdown_ap(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    web_cmd_t c = { .kind = WEB_CMD_SHUTDOWN_AP };
+    if (!web_cmd_queue || xQueueSend(web_cmd_queue, &c, 0) != pdTRUE) {
+        return send_json(req, 503, "{\"error\":\"busy\"}");
+    }
+    return send_json(req, 204, "");
+}
+
+static esp_err_t h_factory_reset(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    char body[64]; size_t blen = 0;
+    if (!body_read(req, body, sizeof body, &blen))
+        return send_json(req, 400, "{\"error\":\"bad_body\"}");
+    if (!strstr(body, "\"confirm\":\"WIPE\""))
+        return send_json(req, 400, "{\"error\":\"need_confirm\"}");
+    send_json(req, 200, "{\"ok\":true}");
+    // Brief delay so the response actually flushes before we wipe + restart.
+    vTaskDelay(pdMS_TO_TICKS(250));
+    storage_factory_reset();
+    esp_restart();
+    return ESP_OK; // unreachable
+}
+
 // ---- lifecycle --------------------------------------------------------------
 
 esp_err_t web_server_start(void) {
@@ -366,6 +395,13 @@ esp_err_t web_server_start(void) {
     };
     for (size_t i = 0; i < sizeof more2 / sizeof more2[0]; ++i) {
         httpd_register_uri_handler(g_server, &more2[i]);
+    }
+    static const httpd_uri_t more3[] = {
+        {.uri="/api/admin/shutdown_ap",   .method=HTTP_POST, .handler=h_shutdown_ap},
+        {.uri="/api/admin/factory_reset", .method=HTTP_POST, .handler=h_factory_reset},
+    };
+    for (size_t i = 0; i < sizeof more3 / sizeof more3[0]; ++i) {
+        httpd_register_uri_handler(g_server, &more3[i]);
     }
     touch_activity();
     ESP_LOGI(TAG, "web server up");
