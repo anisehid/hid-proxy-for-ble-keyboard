@@ -20,6 +20,15 @@ static const char *TAG = "WEB";
 static httpd_handle_t g_server = NULL;
 static int64_t        g_last_activity_us = 0;
 
+extern const uint8_t  index_html_start[]  asm("_binary_index_html_start");
+extern const uint8_t  index_html_end[]    asm("_binary_index_html_end");
+extern const uint8_t  login_html_start[]  asm("_binary_login_html_start");
+extern const uint8_t  login_html_end[]    asm("_binary_login_html_end");
+extern const uint8_t  app_css_start[]     asm("_binary_app_css_start");
+extern const uint8_t  app_css_end[]       asm("_binary_app_css_end");
+extern const uint8_t  app_js_start[]      asm("_binary_app_js_start");
+extern const uint8_t  app_js_end[]        asm("_binary_app_js_end");
+
 // Process-wide secret for signing session tokens (regenerated on boot).
 static uint8_t g_session_key[32];
 
@@ -356,6 +365,27 @@ static esp_err_t h_factory_reset(httpd_req_t *req) {
     return ESP_OK; // unreachable
 }
 
+// ---- static assets ----------------------------------------------------------
+
+static esp_err_t serve_static(httpd_req_t *req, const char *mime,
+                              const uint8_t *start, const uint8_t *end) {
+    httpd_resp_set_type(req, mime);
+    return httpd_resp_send(req, (const char *)start, end - start);
+}
+
+static esp_err_t h_index(httpd_req_t *req) {
+    return serve_static(req, "text/html", index_html_start, index_html_end);
+}
+static esp_err_t h_login_page(httpd_req_t *req) {
+    return serve_static(req, "text/html", login_html_start, login_html_end);
+}
+static esp_err_t h_css(httpd_req_t *req) {
+    return serve_static(req, "text/css", app_css_start, app_css_end);
+}
+static esp_err_t h_js(httpd_req_t *req) {
+    return serve_static(req, "application/javascript", app_js_start, app_js_end);
+}
+
 // ---- lifecycle --------------------------------------------------------------
 
 esp_err_t web_server_start(void) {
@@ -365,7 +395,7 @@ esp_err_t web_server_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8 * 1024;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 20;
 
     if (httpd_start(&g_server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
@@ -402,6 +432,15 @@ esp_err_t web_server_start(void) {
     };
     for (size_t i = 0; i < sizeof more3 / sizeof more3[0]; ++i) {
         httpd_register_uri_handler(g_server, &more3[i]);
+    }
+    static const httpd_uri_t statics[] = {
+        {.uri="/",          .method=HTTP_GET, .handler=h_index},
+        {.uri="/login",     .method=HTTP_GET, .handler=h_login_page},
+        {.uri="/app.css",   .method=HTTP_GET, .handler=h_css},
+        {.uri="/app.js",    .method=HTTP_GET, .handler=h_js},
+    };
+    for (size_t i = 0; i < sizeof statics / sizeof statics[0]; ++i) {
+        httpd_register_uri_handler(g_server, &statics[i]);
     }
     touch_activity();
     ESP_LOGI(TAG, "web server up");

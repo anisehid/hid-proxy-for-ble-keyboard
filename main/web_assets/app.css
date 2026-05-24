@@ -1,0 +1,14 @@
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}
+body{max-width:540px;margin:1rem auto;padding:0 1rem;line-height:1.5;color:#111}
+h1{font-size:1.3rem;margin-bottom:1rem}
+h2{font-size:1rem;margin:1.5rem 0 .5rem;border-bottom:1px solid #ddd;padding-bottom:.25rem}
+button{padding:.5rem 1rem;border:1px solid #888;background:#f5f5f5;border-radius:4px;cursor:pointer}
+button:hover{background:#e5e5e5}
+button.danger{border-color:#a33;color:#a33}
+input{padding:.5rem;border:1px solid #888;border-radius:4px;width:100%}
+.row{display:flex;align-items:center;gap:.5rem;padding:.25rem 0}
+.row code{flex:1;font-family:monospace;font-size:.85rem;color:#555}
+.muted{color:#666;font-size:.85rem}
+.err{color:#a33;margin-top:.5rem}
+.toggle{display:inline-flex;gap:.5rem;align-items:center}
+.toggle input{width:auto}
