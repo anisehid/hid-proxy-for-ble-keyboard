@@ -36,6 +36,8 @@
 #include "esp_hidh.h"
 #include "runtime_mode.h"
 #include "storage.h"
+#include "web_server.h"
+#include "wifi_ap.h"
 
 #define BLE_STATUS_CONNECTED  1
 #define BLE_STATUS_SCAN       2
@@ -328,7 +330,12 @@ void app_main(void) {
     case GESTURE_TRIPLE_TAP:
       ESP_LOGI(TAG, "Gesture: TRIPLE_TAP - entering ADMIN mode");
       runtime_mode_set(RUNTIME_MODE_ADMIN);
-      // wifi_ap + web_server startup wired in Task 9
+      set_led_mode(LED_MODE_ADMIN);
+      // Wi-Fi driver requires the default event loop. Idempotent on subsequent calls.
+      esp_event_loop_create_default();
+      if (wifi_ap_start() == ESP_OK) {
+        web_server_start();
+      }
       break;
     default:
       break;

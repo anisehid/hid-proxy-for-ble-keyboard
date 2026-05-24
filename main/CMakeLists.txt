@@ -8,9 +8,12 @@ set(srcs "esp_hid_host_main.c"
          "device_store.c"
          "button_gesture.c"
          "runtime_mode.c"
-         "wifi_ap.c")
+         "wifi_ap.c"
+         "sha256.c"
+         "web_auth.c"
+         "web_server.c")
 set(include_dirs ".")
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
-                       REQUIRES esp_hid driver esp_wifi esp_netif esp_event
-                       PRIV_REQUIRES nvs_flash)
+                       REQUIRES esp_hid driver esp_wifi esp_netif esp_event esp_http_server
+                       PRIV_REQUIRES nvs_flash mbedtls)
