@@ -153,6 +153,15 @@ void hid_connect(void *pvParameters) {
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(400));
 
+#ifdef DEBUG_HEAP
+    static int64_t s_last_heap_log_us = 0;
+    int64_t heap_now = esp_timer_get_time();
+    if ((heap_now - s_last_heap_log_us) > (30LL * 1000 * 1000)) {
+      ESP_LOGI(TAG, "free heap: %u", (unsigned)esp_get_free_heap_size());
+      s_last_heap_log_us = heap_now;
+    }
+#endif
+
     if (ble_status.status == BLE_STATUS_CONNECTED) {
       continue;
     }
@@ -266,7 +275,7 @@ static bool disconnect_device() {
 void app_main(void) {
   ESP_ERROR_CHECK(init());
   xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL);
-  xTaskCreate(&hid_connect, "hid_connect", 6 * 1024, NULL, 2, NULL);
+  xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL);
   while (true) {
     // check for reset button, if pressed, reset scan
     if (gpio_get_level(BOOT_MODE_PIN) == 0) {
