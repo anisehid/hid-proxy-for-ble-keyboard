@@ -28,9 +28,11 @@ static void touch_activity(void) { g_last_activity_us = esp_timer_get_time(); }
 static esp_err_t send_json(httpd_req_t *req, int code, const char *json) {
     httpd_resp_set_status(req, (code == 200) ? "200 OK"
                               : (code == 201) ? "201 Created"
+                              : (code == 202) ? "202 Accepted"
                               : (code == 204) ? "204 No Content"
                               : (code == 400) ? "400 Bad Request"
                               : (code == 401) ? "401 Unauthorized"
+                              : (code == 404) ? "404 Not Found"
                               : (code == 409) ? "409 Conflict"
                               : (code == 429) ? "429 Too Many Requests"
                               : "500 Internal Server Error");
@@ -232,6 +234,67 @@ static esp_err_t h_devices_list(httpd_req_t *req) {
     return send_json(req, 200, body);
 }
 
+static esp_err_t h_discovery_get(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    disc_entry_t buf[DISC_RING_MAX];
+    int n = hid_discovery_snapshot(buf, DISC_RING_MAX);
+    char body[1024];
+    int off = snprintf(body, sizeof body,
+        "{\"enabled\":%s,\"results\":[",
+        hid_discovery_is_enabled() ? "true" : "false");
+    for (int i = 0; i < n; ++i) {
+        if (off >= (int)sizeof body - 1) break;
+        const uint8_t *m = buf[i].bda;
+        off += snprintf(body + off, sizeof body - off,
+            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"name\":\"%.11s\","
+            "\"rssi\":%d,\"addr_type\":%u}",
+            i ? "," : "", m[0], m[1], m[2], m[3], m[4], m[5],
+            buf[i].name, buf[i].rssi, buf[i].addr_type);
+    }
+    if (off < (int)sizeof body - 1) {
+        snprintf(body + off, sizeof body - off, "]}");
+    } else {
+        body[sizeof body - 1] = 0;
+    }
+    return send_json(req, 200, body);
+}
+
+static esp_err_t h_discovery_post(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    char body[64]; size_t blen = 0;
+    if (!body_read(req, body, sizeof body, &blen))
+        return send_json(req, 400, "{\"error\":\"bad_body\"}");
+    bool enable = strstr(body, "\"enabled\":true") != NULL;
+    web_cmd_t c = { .kind = enable ? WEB_CMD_START_DISCOVERY : WEB_CMD_STOP_DISCOVERY };
+    if (web_cmd_queue) xQueueSend(web_cmd_queue, &c, 0);
+    return send_json(req, 200, "{\"ok\":true}");
+}
+
+// Body: {"mac":"aa:bb:cc:dd:ee:ff","addr_type":1}
+static esp_err_t h_connect(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    char body[128]; size_t blen = 0;
+    if (!body_read(req, body, sizeof body, &blen))
+        return send_json(req, 400, "{\"error\":\"bad_body\"}");
+    char mac_s[18];
+    if (!json_extract_string(body, "mac", mac_s, sizeof mac_s))
+        return send_json(req, 400, "{\"error\":\"no_mac\"}");
+    unsigned m[6];
+    if (sscanf(mac_s, "%2x:%2x:%2x:%2x:%2x:%2x",
+               &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6)
+        return send_json(req, 400, "{\"error\":\"bad_mac\"}");
+    // addr_type may be absent; default to public (0).
+    char at[4]; int addr_type = 0;
+    if (json_extract_string(body, "addr_type", at, sizeof at)) addr_type = atoi(at);
+    web_cmd_t c = { .kind = WEB_CMD_CONNECT, .addr_type = (uint8_t)addr_type };
+    for (int i = 0; i < 6; ++i) c.bda[i] = (uint8_t)m[i];
+    if (web_cmd_queue) xQueueSend(web_cmd_queue, &c, 0);
+    return send_json(req, 202, "{\"ok\":true}");
+}
+
 static esp_err_t h_devices_delete(httpd_req_t *req) {
     if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
     touch_activity();
@@ -290,6 +353,14 @@ esp_err_t web_server_start(void) {
     };
     for (size_t i = 0; i < sizeof more / sizeof more[0]; ++i) {
         httpd_register_uri_handler(g_server, &more[i]);
+    }
+    static const httpd_uri_t more2[] = {
+        {.uri="/api/discovery",       .method=HTTP_GET,  .handler=h_discovery_get},
+        {.uri="/api/discovery",       .method=HTTP_POST, .handler=h_discovery_post},
+        {.uri="/api/devices/connect", .method=HTTP_POST, .handler=h_connect},
+    };
+    for (size_t i = 0; i < sizeof more2 / sizeof more2[0]; ++i) {
+        httpd_register_uri_handler(g_server, &more2[i]);
     }
     touch_activity();
     ESP_LOGI(TAG, "web server up");
