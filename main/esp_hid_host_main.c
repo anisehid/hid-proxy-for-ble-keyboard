@@ -195,6 +195,7 @@ static esp_err_t init() {
   /* Init esp hid gap */
   ESP_LOGI(TAG, "setting hid gap, mode:%d", HID_HOST_MODE);
   ESP_ERROR_CHECK(esp_hid_gap_init(HID_HOST_MODE));
+  ESP_ERROR_CHECK(storage_complete_migration());
   ble_status.status = BLE_STATUS_SCAN;
 
   ESP_ERROR_CHECK(

@@ -12,30 +12,23 @@
 #include "nvs_flash.h"
 #include <stdio.h>
 
-#define STORAGE_NAMESPACE "storage"
-#define BOOT_MODE_PIN GPIO_NUM_9
+#define STORAGE_NAMESPACE   "hidproxy_v2"
+#define STORAGE_OLD_NAMESPACE "storage"
+#define BOOT_MODE_PIN       GPIO_NUM_9
 #define BLE_RESULTS_STORAGE "ble_results"
-#define BLE_STATUS "ble_status"
+#define BLE_STATUS          "ble_status"
+#define SCHEMA_VERSION_KEY  "schema_version"
+#define SCHEMA_VERSION_VAL  2
 
-/**
- * ble_results data layouts
- * result_number (4B)
- * sizeof(scan_result)(4B) scan_result
- * sizeof(scan_result)(4B) scan_result
- **/
-esp_err_t init_nvs_flash();
+esp_err_t init_nvs_flash(void);
 
-// save a new ble device
-// set ble status to 1, and save mac_addr
-// return true if success
+// Finish first-boot migration (erases old Bluedroid bonds, writes schema_version).
+// Must be called AFTER esp_hid_gap_init() so the bond list is available.
+// Idempotent: no-op once schema_version is written.
+esp_err_t storage_complete_migration(void);
+
 bool save_ble_device(uint8_t *mac_addr);
-
-// get saved device
-// return true if found saved device
-// otherwise, return false
 bool read_ble_device(uint8_t *mac_addr);
-
-// set ble_status to 0
-bool clear_ble_devices();
+bool clear_ble_devices(void);
 
 #endif // HID_PROXY_STORAGE_H
