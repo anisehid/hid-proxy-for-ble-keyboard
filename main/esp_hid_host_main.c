@@ -30,6 +30,7 @@
 #include "led.h"
 #include "nvs_flash.h"
 
+#include "button_gesture.h"
 #include "device_store.h"
 #include "esp_hid_gap.h"
 #include "esp_hidh.h"
@@ -236,6 +237,7 @@ void hid_connect(void *pvParameters) {
 }
 
 static esp_err_t init() {
+  runtime_mode_init();
   esp_err_t ret;
   /* Init nvs flash for BLE status storing */
   init_nvs_flash();
@@ -296,17 +298,41 @@ void app_main(void) {
   ESP_ERROR_CHECK(init());
   xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL);
   xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL);
+
+  gesture_ctx_t gctx;
+  gesture_init(&gctx);
+
+  // Configure IO9 as input with internal pull-up (boot button).
+  gpio_config_t io = {
+      .pin_bit_mask = 1ULL << BOOT_MODE_PIN,
+      .mode = GPIO_MODE_INPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config(&io);
+
   while (true) {
-    // check for reset button, if pressed, reset scan
-    if (gpio_get_level(BOOT_MODE_PIN) == 0) {
-      vTaskDelay(1000 / portTICK_PERIOD_MS);
-      if (gpio_get_level(BOOT_MODE_PIN) == 0) {
-        ESP_LOGI(TAG, "BUTTON IS DOWN");
-        if (disconnect_device()) {
-          ESP_LOGI(TAG, "CLEAR BLE STATUS SUCCESS");
-        }
-      }
+    int level = gpio_get_level(BOOT_MODE_PIN);
+    gesture_t g = gesture_step(&gctx, level, esp_timer_get_time());
+    switch (g) {
+    case GESTURE_HOLD_1S:
+      ESP_LOGI(TAG, "Gesture: HOLD_1S - forget active device");
+      disconnect_device();
+      break;
+    case GESTURE_HOLD_5S:
+      ESP_LOGW(TAG, "Gesture: HOLD_5S - FACTORY RESET");
+      storage_factory_reset();
+      esp_restart();
+      break;
+    case GESTURE_TRIPLE_TAP:
+      ESP_LOGI(TAG, "Gesture: TRIPLE_TAP - entering ADMIN mode");
+      runtime_mode_set(RUNTIME_MODE_ADMIN);
+      // wifi_ap + web_server startup wired in Task 9
+      break;
+    default:
+      break;
     }
-    vTaskDelay(200 / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
