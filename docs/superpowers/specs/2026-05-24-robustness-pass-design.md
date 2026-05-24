@@ -64,30 +64,53 @@ The README line "No authentication is required" is removed; pairing now uses LES
 
 Current `storage.c` uses namespace `"storage"` with keys `ble_status` (int32) and `ble_results` (blob of one MAC). After the bonding change, the proxy's stored MAC must agree with Bluedroid's bond list — old-firmware MACs have no corresponding bond and would loop forever.
 
+The migration is two-phase because `esp_ble_get_bond_device_list` requires Bluedroid enabled, but `init_nvs_flash()` runs before `esp_hid_gap_init()`.
+
 **Change:**
 1. Bump `STORAGE_NAMESPACE` from `"storage"` to `"hidproxy_v2"`.
-2. Add a `SCHEMA_VERSION` key (`schema_version`, int32, value `2`).
-3. In `init_nvs_flash()`, after `nvs_flash_init()`:
+2. Add a `schema_version` key (int32, current value `2`).
+3. **Phase 1 — in `init_nvs_flash()`, after `nvs_flash_init()`:**
    - Open `"hidproxy_v2"`, read `schema_version`.
-   - If missing: this is a first boot on new firmware. Open and `nvs_erase_all` on the old `"storage"` namespace, then iterate `esp_ble_get_bond_device_list` and call `esp_ble_remove_bond_device` for each entry, then write `schema_version = 2` to the new namespace.
-   - Log: `"first-boot migration: erased old NVS, erased N bonds"`.
-4. `BLE_RESULTS_STORAGE` and `BLE_STATUS` keys keep their names inside the new namespace.
+   - If found and equals `2`: nothing to do, set `g_need_bond_wipe = false`.
+   - If missing: open the old `"storage"` namespace, `nvs_erase_all`, commit, close. Set the file-static `g_need_bond_wipe = true`. Do **not** write `schema_version` yet.
+   - Log: `"first-boot phase 1: erased old NVS namespace"`.
+4. **Phase 2 — new `storage_complete_migration()` called from `init()` in `esp_hid_host_main.c` immediately after `esp_hid_gap_init()` returns OK:**
+   - If `g_need_bond_wipe` is false, return.
+   - Iterate `esp_ble_get_bond_device_list` and call `esp_ble_remove_bond_device` for each entry.
+   - Open `"hidproxy_v2"`, write `schema_version = 2`, commit, close.
+   - Log: `"first-boot phase 2: erased N bonds, schema_version=2"`.
+5. `BLE_RESULTS_STORAGE` and `BLE_STATUS` keys keep their names inside the new namespace.
 
-Public API (`save_ble_device`, `read_ble_device`, `clear_ble_devices`) does not change.
+**Idempotency**: if power is lost between phase 1 and phase 2, next boot still finds `schema_version` missing and repeats both phases. Bond removal on an empty list is a no-op; old-namespace erase on an already-erased namespace is a no-op.
+
+Public API (`save_ble_device`, `read_ble_device`, `clear_ble_devices`) does not change. `storage_complete_migration` is the only new export.
 
 User impact: one re-pair required after flashing the update.
 
 ### 4.3 Already-connected target crash
 
-Restructure the connect path so success is determined by `ESP_HIDH_OPEN_EVENT`, not by the synchronous return of `esp_hidh_dev_open`.
+Restructure the connect path so success is determined by `ESP_HIDH_OPEN_EVENT`, not by the synchronous return of `esp_hidh_dev_open`. Introduce a `CONNECTING` sub-state so the scan loop knows an open is in flight and shouldn't restart scanning.
+
+**State machine** (in `ble_status.status`):
+
+```
+SCAN ──dispatch open──> CONNECTING ──OPEN_EVENT ok──> CONNECTED
+                            │                            │
+                            │                            └─CLOSE_EVENT─> SCAN
+                            │
+                            ├─OPEN_EVENT fail──> SCAN (and record backoff)
+                            └─10s timeout─────> SCAN
+```
+
+A new constant: `#define BLE_STATUS_CONNECTING 3`. Tracked alongside the dispatch timestamp: `static int64_t s_connecting_since_us;`.
 
 **`esp_hid_host_main.c::connect_hid_dev`** becomes "request open and return immediately":
 
 - Call `esp_hidh_dev_open(...)`.
+- Set `ble_status.status = BLE_STATUS_CONNECTING` and `s_connecting_since_us = esp_timer_get_time()`.
 - Do **not** call `save_ble_device` here.
-- Do **not** set `ble_status = CONNECTED` here.
 - Do **not** call `set_led_mode(BLE_CONNECTED_LED_MODE)` here.
-- Return only whether the open call was dispatched.
+- Return whether `esp_hidh_dev_open` returned non-NULL (only indicates the call was accepted, not that the connection succeeded).
 
 **`hidh_callback::ESP_HIDH_OPEN_EVENT`** owns the success/failure transition:
 
@@ -99,21 +122,42 @@ Restructure the connect path so success is determined by `ESP_HIDH_OPEN_EVENT`, 
 - On failure:
   - Log BDA + `param->open.status`.
   - `esp_hidh_dev_free(param->open.dev)` to release the half-open handle.
-  - Record `bda` and `now` in a one-slot "backoff" static (`static esp_bd_addr_t failed_bda; static int64_t failed_at_us;`).
-  - Leave `ble_status` at `SCAN`.
+  - Record `bda` and `esp_timer_get_time()` in a one-slot "backoff" static (`static esp_bd_addr_t s_failed_bda; static int64_t s_failed_at_us;`).
+  - `ble_status.status = BLE_STATUS_SCAN`.
 
-**`hid_connect` loop** consults the backoff before attempting `connect_hid_dev`:
+**`hid_connect` loop**:
 
-- If candidate's `bda` equals `failed_bda` and `(esp_timer_get_time() - failed_at_us) < 30_000_000`, skip this candidate.
-- Otherwise proceed.
+- If `ble_status.status == BLE_STATUS_CONNECTED`: sleep, continue.
+- If `ble_status.status == BLE_STATUS_CONNECTING`:
+  - If `(esp_timer_get_time() - s_connecting_since_us) > 10_000_000`: log timeout, set `ble_status.status = BLE_STATUS_SCAN`. The half-open handle is not freed (no API to do so without an OPEN_EVENT-delivered pointer) — Bluedroid will reclaim it on its own connection-fail path or on next reset.
+  - Otherwise sleep, continue.
+- If `ble_status.status == BLE_STATUS_SCAN`: scan; for each candidate, skip if its `bda` matches `s_failed_bda` and `(now - s_failed_at_us) < 30_000_000`; otherwise call `connect_hid_dev` (which transitions to `CONNECTING`).
 
 **Backoff capacity**: single slot. Single-device proxy; revisited in the multi-device pass.
-
-**Connect wait**: after dispatching open, `hid_connect` polls `ble_status` for up to 5s (10 × 500ms ticks); if still `SCAN`, give up and re-scan. The OPEN_EVENT handler is what actually changes the status.
 
 ### 4.4 LED bugs
 
 **Fix the pointer bug.** Rename the file-static `update_led` to `g_update_led`. In `get_led_mode`, write `*update_led = g_update_led;`. Same rename in `set_update_led` and `set_led_mode`.
+
+**Extract `led_duty_for` as a pure function in its own file** (`main/led_duty.c` + `main/led_duty.h`) so it can be unit-tested on host without dragging in FreeRTOS, ESP-IDF logging, or LEDC headers. Signature:
+
+```c
+// led_duty.h
+#include <stdint.h>
+#define LED_DUTY_ON   0
+#define LED_DUTY_DIME 8000
+int led_duty_for(int mode, int tick);
+```
+
+| Mode | Behavior |
+|---|---|
+| `LED_MODE_OFF` | `LED_DUTY_DIME` always. |
+| `LED_MODE_ALWAYS_ON` | `LED_DUTY_ON` always. |
+| `LED_MODE_FAST_BLINK` | `LED_DUTY_ON` if `(tick / 2) % 2 == 0` else `LED_DUTY_DIME` (100ms toggle at 50ms tick). |
+| `LED_MODE_SLOW_BLINK` | `LED_DUTY_ON` if `(tick / 20) % 2 == 0` else `LED_DUTY_DIME` (1000ms toggle). |
+| Anything else | `LED_DUTY_DIME` (default-safe). |
+
+`led.c` keeps the existing duty `#define`s (which equal these values) but `change_led` calls `led_duty_for` to get the duty. The mode-constant `#define`s stay in `led.h` (shared between `led.c` and `led_duty.c`).
 
 **Restructure `change_led` as a single-tick loop.** Today each mode runs its own `while (true) { ledc_blink(...); }` whose own `vTaskDelay` determines the response latency to a mode change. Replace with one loop:
 
@@ -134,47 +178,56 @@ void change_led(void *_) {
 }
 ```
 
-`led_duty_for(int mode, int tick)` is a new pure function exposed in `led.h`:
-
-| Mode | Behavior |
-|---|---|
-| `LED_MODE_OFF` | `LEDC_DUTY_DIME` always. |
-| `LED_MODE_ALWAYS_ON` | `LEDC_DUTY_ON` always. |
-| `LED_MODE_FAST_BLINK` | `LEDC_DUTY_ON` if `(tick / 2) % 2 == 0` else `LEDC_DUTY_DIME` (100ms toggle at 50ms tick). |
-| `LED_MODE_SLOW_BLINK` | `LEDC_DUTY_ON` if `(tick / 20) % 2 == 0` else `LEDC_DUTY_DIME` (1000ms toggle). |
-
 Mode changes take effect within one 50ms tick.
 
 The `update_led` flag becomes redundant (the loop detects mode changes itself) and is removed: `get_led_mode`'s second parameter goes away, callers updated, `set_update_led` deleted.
 
 ### 4.5 Hot-path malloc
 
-Replace `g_packed_data` (heap) with a file-static buffer in `ch932x.c`:
+**Extract `pack_ch9329_data` into its own file** (`main/ch9329_pack.c` + `main/ch9329_pack.h`) so it can be unit-tested on host without dragging in `driver/uart.h` or other ESP-IDF headers. Signature:
 
 ```c
-static uint8_t s_packed_buf[FIXED_CH9329_DATA_LEN + 64];
-```
+// ch9329_pack.h
+#include <stdint.h>
+#define CH9329_HEADER_LEN 6
+#define CH9329_MAX_PAYLOAD 64
 
-CH9329 protocol caps payload at 64 bytes; 70 bytes total is acceptable in BSS.
+typedef enum {
+  CMD_GET_INFO              = 0x01,
+  CMD_SEND_KB_GENERAL_DATA  = 0x02,
+  CMD_SEND_KB_MEDIA_DATA    = 0x03,
+} CH9329CMD;
 
-`pack_ch9329_data` becomes a pure function:
-
-```c
+// Returns total packed length on success, 0 on invalid length.
 int pack_ch9329_data(CH9329CMD cmd, const uint8_t *data, int length, uint8_t *out);
 ```
 
+Behavior:
 - Returns total packed length (`length + 6`) on success.
-- Returns `0` if `length < 0 || length > 64` (caller logs and drops the report).
-- Writes header, addr, cmd, len, payload, checksum to `out`.
+- Returns `0` if `length < 0 || length > CH9329_MAX_PAYLOAD`.
+- Writes header (`0x57 0xAB`), addr (`0x00`), cmd, len, payload, checksum to `out`.
+- Caller is responsible for `out` being at least `CH9329_HEADER_LEN + CH9329_MAX_PAYLOAD` bytes.
 
-Default call site in `hidh_callback` passes `s_packed_buf`:
+**`ch932x.c` keeps `init_uart` and `send_data_to_uart`** (these need ESP-IDF UART headers) and gains a file-static buffer:
 
 ```c
-int n = pack_ch9329_data(CMD_SEND_KB_GENERAL_DATA, param->input.data, param->input.length, s_packed_buf);
-if (n > 0) send_data_to_uart(s_packed_buf, n);
+static uint8_t s_packed_buf[CH9329_HEADER_LEN + CH9329_MAX_PAYLOAD];
 ```
 
-The `g_packed_data` / `g_packed_data_len` externs are removed from `ch932x.h`.
+`ch932x.c` no longer defines `g_packed_data` / `g_packed_data_len` / `pack_ch9329_data`; those move to `ch9329_pack.c`. Header `ch932x.h` no longer externs them.
+
+Call site in `esp_hid_host_main.c::hidh_callback`:
+
+```c
+#ifdef USE_CH9329
+int n = pack_ch9329_data(CMD_SEND_KB_GENERAL_DATA, param->input.data, param->input.length, s_packed_buf);
+if (n > 0) send_data_to_uart(s_packed_buf, n);
+#else
+send_data_to_uart(param->input.data, param->input.length);
+#endif
+```
+
+`s_packed_buf` is declared `extern` in `ch932x.h` and defined in `ch932x.c` (since it's tied to the UART send path, not the pure pack function).
 
 ### 4.6 Scan deadlock
 
@@ -211,48 +264,54 @@ While in `esp_hid_gap.c`, remove the misleading `if (memcpy(...) == NULL)` check
 
 ## 5. Tests (host-side, pure logic)
 
-A new top-level `test/host/` directory builds the pure-function pieces against host gcc with Unity (vendored from `$IDF_PATH/components/unity/unity/src/`; if that path is unstable, vendor `unity.c`/`unity.h` into `test/host/vendor/`).
+A new top-level `test/host/` directory builds the extracted pure-function source files (`main/ch9329_pack.c`, `main/led_duty.c`) against host gcc with Unity. These files have no ESP-IDF dependencies — only `<stdint.h>` — so no stubs are needed.
 
-**Suite 1 — `test_ch932x.c`** (~5 cases):
-- Header bytes are `0x57 0xAB`.
-- Address byte is `0x00`.
-- Command byte matches the enum.
-- Length byte matches the payload length.
+Unity is vendored at `test/host/vendor/` (`unity.c`, `unity.h`, `unity_internals.h`, MIT-licensed). Vendoring rather than depending on `$IDF_PATH/components/unity/unity/src/` keeps the host tests buildable without ESP-IDF installed.
+
+**Suite 1 — `test_ch9329_pack.c`** (~6 cases):
+- Header bytes are `0x57 0xAB`; address byte is `0x00`.
+- Command byte equals the enum value passed in.
+- Length byte equals the payload length passed in.
 - Checksum equals `sum(packet[0..n-1]) & 0xFF`.
-- `length > 64` returns 0; output buffer untouched (or zeroed before — test doesn't assert).
-- `length == 0` returns 6, no payload bytes written.
+- Payload bytes copied verbatim from input.
+- `length > 64` returns `0`.
+- `length == 0` returns `6`, no payload bytes written.
 
-**Suite 2 — `test_led.c`** (~6 cases):
-- `led_duty_for(LED_MODE_OFF, *)` always returns the dim duty.
-- `led_duty_for(LED_MODE_ALWAYS_ON, *)` always returns the on duty.
-- `led_duty_for(LED_MODE_FAST_BLINK, tick)` toggles every 2 ticks; assert `[0]=on, [2]=dim, [4]=on, [6]=dim`.
-- `led_duty_for(LED_MODE_SLOW_BLINK, tick)` toggles every 20 ticks; assert `[0]=on, [20]=dim, [40]=on, [60]=dim`.
-- Unknown mode returns the dim duty (default-safe).
+**Suite 2 — `test_led_duty.c`** (~5 cases):
+- `led_duty_for(LED_MODE_OFF, *)` always returns `LED_DUTY_DIME`.
+- `led_duty_for(LED_MODE_ALWAYS_ON, *)` always returns `LED_DUTY_ON`.
+- `led_duty_for(LED_MODE_FAST_BLINK, tick)` toggles every 2 ticks; assert `tick=0→on, tick=2→dim, tick=4→on, tick=6→dim`.
+- `led_duty_for(LED_MODE_SLOW_BLINK, tick)` toggles every 20 ticks; assert `tick=0→on, tick=20→dim, tick=40→on, tick=60→dim`.
+- Unknown mode returns `LED_DUTY_DIME` (default-safe).
 
 **Infrastructure:**
-- `test/host/CMakeLists.txt`: host toolchain, compiles `main/ch932x.c` and `main/led.c` plus a stubs include dir (`test/host/stubs/`) with empty inline shims for `esp_log.h`, `driver/uart.h`, `driver/ledc.h`, `freertos/*.h` — the pure functions never call into these at runtime, only include them at compile time.
+- `test/host/CMakeLists.txt`: host toolchain. Compiles `main/ch9329_pack.c`, `main/led_duty.c`, Unity vendor sources, and the two test files + `runner.c`. Adds `main/` and `test/host/vendor/` to include path.
 - `test/host/runner.c`: Unity main; registers both suites.
+- `test/host/vendor/` contains the Unity sources.
 - Build/run: `cd test/host && cmake -B build && cmake --build build && ./build/run_tests`.
 - README gets a "Tests" section with the above command.
 
-What is **not** tested here: BLE/GAP/GATTC, NVS migration (shallow; on-target verification cost ≈ host test cost), UART send, FreeRTOS task loops, the LED `change_led` task itself (only the extracted `led_duty_for` calculator).
+What is **not** tested here: BLE/GAP/GATTC, NVS migration (shallow; on-target verification cost ≈ host test cost), UART send, FreeRTOS task loops, the LED `change_led` task itself (only the extracted `led_duty_for` calculator), the connect-state machine (effects are observable but the state itself is global, fits manual hw verification better).
 
 ## 6. File-by-File Delta
 
 | File | Change |
 |---|---|
 | `main/esp_hid_gap.c` | Add `esp_ble_gap_set_security_param` block (§4.1). Bound `WAIT_BLE_CB()` with 3s timeout (§4.6). Fix the `memcpy() == NULL` check (§4.9). |
-| `main/storage.c` / `main/storage.h` | Bump namespace to `hidproxy_v2`; add `schema_version` key + first-boot migration that erases old namespace and Bluedroid bonds (§4.2). |
-| `main/esp_hid_host_main.c` | Move `save_ble_device` + `ble_status = CONNECTED` + `set_led_mode` into OPEN_EVENT success branch (§4.3). Handle OPEN_EVENT failure: log + `esp_hidh_dev_free` + 30s backoff slot (§4.3). `connect_hid_dev` becomes dispatch-only (§4.3). Bump `hid_connect` stack 6→8KB (§4.7). Optional heap-log under `#ifdef DEBUG_HEAP` (§4.7). Pass `s_packed_buf` to the new pure `pack_ch9329_data` (§4.5). |
-| `main/led.c` / `main/led.h` | Rename file-static to `g_update_led` (§4.4). Extract pure `led_duty_for(mode, tick)` (§4.4, §5). Restructure `change_led` as single 50ms-tick loop (§4.4). Drop `update_led` parameter from `get_led_mode`; delete `set_update_led`. |
-| `main/ch932x.c` / `main/ch932x.h` | Replace `g_packed_data`/`g_packed_data_len` globals with file-static `s_packed_buf[70]`. `pack_ch9329_data` becomes pure function returning packed length, with `length > 64` guard (§4.5). Remove externs from header. |
+| `main/storage.c` / `main/storage.h` | Bump namespace to `hidproxy_v2`; add `schema_version` key + phase-1 erase of old namespace (§4.2). New export `storage_complete_migration()` for phase-2 bond wipe (§4.2). |
+| `main/esp_hid_host_main.c` | Add `BLE_STATUS_CONNECTING` state + `s_connecting_since_us` + `s_failed_bda` / `s_failed_at_us` statics (§4.3). Move `save_ble_device` + status flip + `set_led_mode` into OPEN_EVENT success branch (§4.3). Handle OPEN_EVENT failure: log + `esp_hidh_dev_free` + 30s backoff slot (§4.3). `connect_hid_dev` becomes dispatch + set `CONNECTING` (§4.3). `hid_connect` loop honors `CONNECTING` with 10s timeout and skips backoff candidates (§4.3). Call `storage_complete_migration()` after `esp_hid_gap_init()` (§4.2). Bump `hid_connect` stack 6→8KB (§4.7). Optional heap-log under `#ifdef DEBUG_HEAP` (§4.7). Pass `s_packed_buf` to the new pure `pack_ch9329_data` (§4.5). |
+| `main/led.c` / `main/led.h` | Rename file-static to `g_update_led` (§4.4). Restructure `change_led` as single 50ms-tick loop using `led_duty_for` (§4.4). Drop `update_led` parameter from `get_led_mode`; delete `set_update_led`. |
+| `main/led_duty.c` / `main/led_duty.h` | New: pure `led_duty_for(mode, tick)` plus `LED_DUTY_ON` / `LED_DUTY_DIME` constants. No ESP-IDF deps (§4.4, §5). |
+| `main/ch932x.c` / `main/ch932x.h` | Remove `g_packed_data`/`g_packed_data_len`/`pack_ch9329_data`. Add file-static `s_packed_buf[70]` (declared extern in header). Keep `init_uart` and `send_data_to_uart` (§4.5). |
+| `main/ch9329_pack.c` / `main/ch9329_pack.h` | New: pure `pack_ch9329_data` + `CH9329CMD` enum + size constants. No ESP-IDF deps (§4.5, §5). |
+| `main/CMakeLists.txt` | Add `led_duty.c` and `ch9329_pack.c` to the source list. |
 | `sdkconfig.defaults` | Add `CONFIG_FREERTOS_CHECK_STACKOVERFLOW=2` (§4.7). |
 | `build_flash_monitor.sh` | `PORT="${PORT:-/dev/ttyUSB0}"` (§4.8). |
 | `README.org` | Update flash example to mention `PORT=…`. Remove the two fixed items from "Known issues". Remove "No authentication is required". Add "Tests" section with the host-test command. |
-| `test/host/CMakeLists.txt` | New: host-build target with Unity + pure-function sources + stubs include dir. |
-| `test/host/stubs/esp_log.h`, `test/host/stubs/driver/uart.h`, `test/host/stubs/driver/ledc.h`, `test/host/stubs/freertos/*.h` | New: empty inline shims. |
-| `test/host/test_ch932x.c` | New: ~5 Unity test cases. |
-| `test/host/test_led.c` | New: ~6 Unity test cases. |
+| `test/host/CMakeLists.txt` | New: host-build target compiling `main/ch9329_pack.c`, `main/led_duty.c`, Unity vendor sources, two test files, runner. |
+| `test/host/vendor/unity.c`, `vendor/unity.h`, `vendor/unity_internals.h` | New: vendored Unity (MIT). |
+| `test/host/test_ch9329_pack.c` | New: ~6 Unity test cases. |
+| `test/host/test_led_duty.c` | New: ~5 Unity test cases. |
 | `test/host/runner.c` | New: Unity main. |
 
 ## 7. Verification Plan
