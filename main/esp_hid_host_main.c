@@ -253,15 +253,16 @@ void hid_connect(void *pvParameters) {
       while (r) {
         print_esp_hid_scan_results(r);
 
-        if (saved_count > 0 && !device_store_contains(r->bda)) {
-          // Not a saved device. If admin+discovery is enabled, surface to
-          // the discovery ring (deduplicated by MAC) so the web UI can list it.
+        bool is_saved = device_store_contains(r->bda);
+
+        if (!is_saved) {
+          // Surface to the discovery ring while ADMIN+discovery is on.
           if (s_discovery_enabled &&
               runtime_mode_get() == RUNTIME_MODE_ADMIN) {
             bool found = false;
             for (int i = 0; i < s_disc_count; ++i) {
               if (memcmp(s_disc_ring[i].bda, r->bda, 6) == 0) {
-                s_disc_ring[i].rssi = r->rssi;
+                s_disc_ring[i].rssi       = r->rssi;
                 s_disc_ring[i].seen_at_us = esp_timer_get_time();
                 found = true;
                 break;
@@ -270,14 +271,16 @@ void hid_connect(void *pvParameters) {
             if (!found && s_disc_count < DISC_RING_MAX) {
               disc_entry_t *e = &s_disc_ring[s_disc_count++];
               memcpy(e->bda, r->bda, 6);
-              e->addr_type = r->ble.addr_type;
-              e->rssi = r->rssi;
-              size_t nlen = strnlen(r->name, sizeof e->name - 1);
-              memcpy(e->name, r->name, nlen);
-              e->name[nlen] = '\0';
+              e->addr_type  = r->ble.addr_type;
+              e->rssi       = r->rssi;
+              size_t nl     = strnlen(r->name, sizeof(e->name) - 1);
+              memcpy(e->name, r->name, nl);
+              e->name[nl]   = 0;
               e->seen_at_us = esp_timer_get_time();
             }
           }
+          // Do not auto-connect to unsaved devices. ADMIN+discovery surfaces
+          // them for the user to pick; RELAY mode (or discovery off) ignores them.
           r = r->next;
           continue;
         }
