@@ -54,4 +54,11 @@ int  hid_discovery_snapshot(disc_entry_t *out, int max);
 // True if discovery is currently enabled (ADMIN mode + START_DISCOVERY in effect).
 bool hid_discovery_is_enabled(void);
 
+// Fill `out[6]` with the currently-connected keyboard's BDA. Returns false if
+// no keyboard is currently connected.
+bool hid_connected_bda(uint8_t out[6]);
+
+// Raw BLE_STATUS_* code: 0 = unknown, 1 = CONNECTED, 2 = SCAN, 3 = CONNECTING.
+int  hid_ble_status(void);
+
 #endif

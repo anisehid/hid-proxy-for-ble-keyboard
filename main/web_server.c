@@ -216,12 +216,22 @@ static esp_err_t h_status(httpd_req_t *req) {
     if (idle_remaining_s < 0) idle_remaining_s = 0;
     device_entry_t tmp[DEVICE_STORE_MAX];
     int saved_count = device_store_list(tmp);
-    char body[160];
+    int ble_st = hid_ble_status();
+    uint8_t cbda[6] = {0};
+    bool has_conn = hid_connected_bda(cbda);
+    char conn_field[64] = "null";
+    if (has_conn) {
+        snprintf(conn_field, sizeof conn_field,
+            "\"%02x:%02x:%02x:%02x:%02x:%02x\"",
+            cbda[0], cbda[1], cbda[2], cbda[3], cbda[4], cbda[5]);
+    }
+    char body[256];
     snprintf(body, sizeof body,
         "{\"mode\":\"%s\",\"uptime_s\":%lld,\"ap_idle_remaining_s\":%lld,"
-        "\"saved_count\":%d}",
+        "\"saved_count\":%d,\"ble_status\":%d,\"connected_device\":%s}",
         m == RUNTIME_MODE_ADMIN ? "admin" : "relay",
-        uptime_s, idle_remaining_s, saved_count);
+        uptime_s, idle_remaining_s, saved_count, ble_st, conn_field);
+    ESP_LOGI(TAG, "GET /api/status -> %s", body);
     return send_json(req, 200, body);
 }
 
@@ -230,21 +240,26 @@ static esp_err_t h_devices_list(httpd_req_t *req) {
     touch_activity();
     device_entry_t devs[DEVICE_STORE_MAX];
     int n = device_store_list(devs);
+    uint8_t cbda[6] = {0};
+    bool has_conn = hid_connected_bda(cbda);
     char body[1024];
     int off = snprintf(body, sizeof body, "[");
     for (int i = 0; i < n; ++i) {
         if (off >= (int)sizeof body - 1) break;
         const uint8_t *m = devs[i].bda;
+        bool is_connected = has_conn && memcmp(m, cbda, 6) == 0;
         off += snprintf(body + off, sizeof body - off,
             "%s{\"slot\":%d,\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-            "\"name\":\"%.7s\"}",
-            i ? "," : "", i, m[0], m[1], m[2], m[3], m[4], m[5], devs[i].name);
+            "\"name\":\"%.7s\",\"is_connected\":%s}",
+            i ? "," : "", i, m[0], m[1], m[2], m[3], m[4], m[5], devs[i].name,
+            is_connected ? "true" : "false");
     }
     if (off < (int)sizeof body - 1) {
         snprintf(body + off, sizeof body - off, "]");
     } else {
         body[sizeof body - 1] = 0;
     }
+    ESP_LOGI(TAG, "GET /api/devices -> %d devices", n);
     return send_json(req, 200, body);
 }
 
@@ -271,6 +286,8 @@ static esp_err_t h_discovery_get(httpd_req_t *req) {
     } else {
         body[sizeof body - 1] = 0;
     }
+    ESP_LOGI(TAG, "GET /api/discovery -> enabled=%d n=%d",
+             (int)hid_discovery_is_enabled(), n);
     return send_json(req, 200, body);
 }
 
@@ -281,6 +298,7 @@ static esp_err_t h_discovery_post(httpd_req_t *req) {
     if (!body_read(req, body, sizeof body, &blen))
         return send_json(req, 400, "{\"error\":\"bad_body\"}");
     bool enable = strstr(body, "\"enabled\":true") != NULL;
+    ESP_LOGI(TAG, "POST /api/discovery enable=%d", (int)enable);
     web_cmd_t c = { .kind = enable ? WEB_CMD_START_DISCOVERY : WEB_CMD_STOP_DISCOVERY };
     if (!web_cmd_queue || xQueueSend(web_cmd_queue, &c, 0) != pdTRUE) {
         return send_json(req, 503, "{\"error\":\"busy\"}");
