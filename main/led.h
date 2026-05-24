@@ -16,6 +16,8 @@
 #define LED_MODE_SLOW_BLINK 3
 /* light off */
 #define LED_MODE_OFF 0
+/* web admin AP is up (double-pulse every 2 s) */
+#define LED_MODE_ADMIN 4
 
 typedef struct _LEDMessage {
   int32_t mode;

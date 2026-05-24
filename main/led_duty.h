@@ -12,6 +12,7 @@
 #define LED_MODE_FAST_BLINK 1
 #define LED_MODE_ALWAYS_ON  2
 #define LED_MODE_SLOW_BLINK 3
+#define LED_MODE_ADMIN      4
 
 // Returns the LEDC duty value for the given mode at the given 50ms tick.
 int led_duty_for(int mode, int tick);
