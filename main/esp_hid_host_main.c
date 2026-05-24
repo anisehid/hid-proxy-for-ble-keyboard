@@ -50,6 +50,7 @@
 
 #define CONNECT_TIMEOUT_US        (10LL * 1000 * 1000)
 #define FAILED_DEVICE_BACKOFF_US  (30LL * 1000 * 1000)
+#define ADMIN_IDLE_TIMEOUT_US     (10LL * 60 * 1000 * 1000)
 
 static const char *TAG = "ESP_HIDH_DEMO";
 static esp_hidh_dev_t *connected_dev = NULL;
@@ -367,11 +368,25 @@ static bool disconnect_device() {
   return ret;
 }
 
+static void admin_idle_task(void *_) {
+  while (true) {
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    if (runtime_mode_get() != RUNTIME_MODE_ADMIN) continue;
+    int64_t idle = esp_timer_get_time() - web_server_last_activity_us();
+    if (idle > ADMIN_IDLE_TIMEOUT_US) {
+      ESP_LOGI(TAG, "ADMIN idle 10 min - back to RELAY");
+      web_cmd_t c = { .kind = WEB_CMD_SHUTDOWN_AP };
+      if (web_cmd_queue) xQueueSend(web_cmd_queue, &c, 0);
+    }
+  }
+}
+
 void app_main(void) {
   ESP_ERROR_CHECK(init());
   web_cmd_queue = xQueueCreate(4, sizeof(web_cmd_t));
   xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL);
   xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL);
+  xTaskCreate(&admin_idle_task, "admin_idle", 2048, NULL, 1, NULL);
 
   gesture_ctx_t gctx;
   gesture_init(&gctx);
