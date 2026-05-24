@@ -1,12 +1,15 @@
 #include "web_server.h"
+#include "device_store.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "runtime_mode.h"
 #include "storage.h"
 #include "web_auth.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "WEB";
@@ -187,6 +190,61 @@ static esp_err_t h_auth_logout(httpd_req_t *req) {
     return send_json(req, 204, "");
 }
 
+static esp_err_t h_status(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    runtime_mode_t m = runtime_mode_get();
+    int64_t uptime_s = esp_timer_get_time() / 1000000;
+    int64_t idle_s = (esp_timer_get_time() - g_last_activity_us) / 1000000;
+    int64_t idle_remaining_s = (600 - idle_s);
+    if (idle_remaining_s < 0) idle_remaining_s = 0;
+    device_entry_t tmp[DEVICE_STORE_MAX];
+    int saved_count = device_store_list(tmp);
+    char body[160];
+    snprintf(body, sizeof body,
+        "{\"mode\":\"%s\",\"uptime_s\":%lld,\"ap_idle_remaining_s\":%lld,"
+        "\"saved_count\":%d}",
+        m == RUNTIME_MODE_ADMIN ? "admin" : "relay",
+        uptime_s, idle_remaining_s, saved_count);
+    return send_json(req, 200, body);
+}
+
+static esp_err_t h_devices_list(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    device_entry_t devs[DEVICE_STORE_MAX];
+    int n = device_store_list(devs);
+    char body[1024];
+    int off = snprintf(body, sizeof body, "[");
+    for (int i = 0; i < n; ++i) {
+        const uint8_t *m = devs[i].bda;
+        off += snprintf(body + off, sizeof body - off,
+            "%s{\"slot\":%d,\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+            "\"name\":\"%.7s\"}",
+            i ? "," : "", i, m[0], m[1], m[2], m[3], m[4], m[5], devs[i].name);
+    }
+    snprintf(body + off, sizeof body - off, "]");
+    return send_json(req, 200, body);
+}
+
+static esp_err_t h_devices_delete(httpd_req_t *req) {
+    if (!web_request_authenticated(req)) return send_json(req, 401, "{\"error\":\"auth\"}");
+    touch_activity();
+    // URL: /api/devices/<slot>
+    const char *uri = req->uri;
+    const char *slot_str = strrchr(uri, '/');
+    if (!slot_str) return send_json(req, 400, "{\"error\":\"bad_uri\"}");
+    int slot = atoi(slot_str + 1);
+    if (slot < 0 || slot >= DEVICE_STORE_MAX)
+        return send_json(req, 400, "{\"error\":\"bad_slot\"}");
+    device_entry_t devs[DEVICE_STORE_MAX];
+    int n = device_store_list(devs);
+    if (slot >= n) return send_json(req, 404, "{\"error\":\"empty\"}");
+    if (!device_store_remove(devs[slot].bda))
+        return send_json(req, 500, "{\"error\":\"remove\"}");
+    return send_json(req, 204, "");
+}
+
 // ---- lifecycle --------------------------------------------------------------
 
 esp_err_t web_server_start(void) {
@@ -210,6 +268,14 @@ esp_err_t web_server_start(void) {
     };
     for (size_t i = 0; i < sizeof routes / sizeof routes[0]; ++i) {
         httpd_register_uri_handler(g_server, &routes[i]);
+    }
+    static const httpd_uri_t more[] = {
+        {.uri="/api/status",    .method=HTTP_GET,    .handler=h_status},
+        {.uri="/api/devices",   .method=HTTP_GET,    .handler=h_devices_list},
+        {.uri="/api/devices/*", .method=HTTP_DELETE, .handler=h_devices_delete},
+    };
+    for (size_t i = 0; i < sizeof more / sizeof more[0]; ++i) {
+        httpd_register_uri_handler(g_server, &more[i]);
     }
     touch_activity();
     ESP_LOGI(TAG, "web server up");
