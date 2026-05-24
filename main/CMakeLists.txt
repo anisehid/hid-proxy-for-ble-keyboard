@@ -3,6 +3,7 @@ set(srcs "esp_hid_host_main.c"
          "ch932x.c"
          "ch9329_pack.c"
          "led.c"
+         "led_duty.c"
          "storage.c")
 set(include_dirs ".")
 idf_component_register(SRCS "${srcs}"
