@@ -35,6 +35,7 @@ static esp_err_t send_json(httpd_req_t *req, int code, const char *json) {
                               : (code == 404) ? "404 Not Found"
                               : (code == 409) ? "409 Conflict"
                               : (code == 429) ? "429 Too Many Requests"
+                              : (code == 503) ? "503 Service Unavailable"
                               : "500 Internal Server Error");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, json ? json : "");
@@ -268,7 +269,9 @@ static esp_err_t h_discovery_post(httpd_req_t *req) {
         return send_json(req, 400, "{\"error\":\"bad_body\"}");
     bool enable = strstr(body, "\"enabled\":true") != NULL;
     web_cmd_t c = { .kind = enable ? WEB_CMD_START_DISCOVERY : WEB_CMD_STOP_DISCOVERY };
-    if (web_cmd_queue) xQueueSend(web_cmd_queue, &c, 0);
+    if (!web_cmd_queue || xQueueSend(web_cmd_queue, &c, 0) != pdTRUE) {
+        return send_json(req, 503, "{\"error\":\"busy\"}");
+    }
     return send_json(req, 200, "{\"ok\":true}");
 }
 
@@ -291,7 +294,9 @@ static esp_err_t h_connect(httpd_req_t *req) {
     if (json_extract_string(body, "addr_type", at, sizeof at)) addr_type = atoi(at);
     web_cmd_t c = { .kind = WEB_CMD_CONNECT, .addr_type = (uint8_t)addr_type };
     for (int i = 0; i < 6; ++i) c.bda[i] = (uint8_t)m[i];
-    if (web_cmd_queue) xQueueSend(web_cmd_queue, &c, 0);
+    if (!web_cmd_queue || xQueueSend(web_cmd_queue, &c, 0) != pdTRUE) {
+        return send_json(req, 503, "{\"error\":\"busy\"}");
+    }
     return send_json(req, 202, "{\"ok\":true}");
 }
 
