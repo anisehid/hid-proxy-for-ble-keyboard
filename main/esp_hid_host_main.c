@@ -187,8 +187,18 @@ static bool connect_hid_dev(esp_hid_scan_result_t *cr) {
 }
 
 void hid_connect(void *pvParameters) {
+  int hb = 0;
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(400));
+
+    // Heartbeat every ~4 s so we can tell from the serial log that this task
+    // is alive even when esp_hid_scan is timing out repeatedly.
+    if ((++hb % 10) == 0) {
+      ESP_LOGI(TAG, "hid_connect alive: ble=%d admin=%d disc=%d",
+               (int)ble_status.status,
+               (int)(runtime_mode_get() == RUNTIME_MODE_ADMIN),
+               (int)s_discovery_enabled);
+    }
 
     // Drain web command queue at top of loop.
     if (web_cmd_queue) {
