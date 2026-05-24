@@ -80,10 +80,13 @@ void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
 
     // Send keycodes to ch9328/ch9329
 #ifdef USE_CH9329
-    // For ch9329, pack the keycode data
-    pack_ch9329_data(CMD_SEND_KB_GENERAL_DATA, param->input.data,
-                     param->input.length);
-    send_data_to_uart(g_packed_data, g_packed_data_len + FIXED_CH9329_DATA_LEN);
+    int n = pack_ch9329_data(CMD_SEND_KB_GENERAL_DATA, param->input.data,
+                             param->input.length, s_packed_buf);
+    if (n > 0) {
+      send_data_to_uart(s_packed_buf, n);
+    } else {
+      ESP_LOGW(TAG, "pack_ch9329_data rejected length %d", param->input.length);
+    }
 #else
     // For ch9328, pass the keycode data directly
     send_data_to_uart(param->input.data, param->input.length);

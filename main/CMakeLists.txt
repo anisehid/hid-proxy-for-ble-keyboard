@@ -1,6 +1,7 @@
 set(srcs "esp_hid_host_main.c"
          "esp_hid_gap.c"
          "ch932x.c"
+         "ch9329_pack.c"
          "led.c"
          "storage.c")
 set(include_dirs ".")
