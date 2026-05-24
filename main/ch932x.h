@@ -27,31 +27,10 @@ void init_uart();
 int send_data_to_uart(void *data, int len);
 
 #ifdef USE_CH9329
-#define FIXED_CH9329_DATA_LEN 6
+#include "ch9329_pack.h"
 
-/* ch9329 command, currently only is used*/
-typedef enum enum_CH9329CMD {
-  CMD_GET_INFO = 0x01,
-  CMD_SEND_KB_GENERAL_DATA = 0x02,
-  CMD_SEND_KB_MEDIA_DATA = 0x03,
-  CMD_MAX
-} CH9329CMD;
-
-extern uint8_t *g_packed_data;
-extern int g_packed_data_len;
-
-/*
- *  Pack the original keyboard
- *  Format:
- *  HEAD 2B
- *  ADDR 1B
- *  CMD  1B
- *    CMD_SEND_KB_GENERAL_DATA 0x02
- *  LEN  1B
- *  DATA NB(N=0-64)
- *  SUM  1B(SUM=HEAD+ADDR+CMD+LEN+DATA)
- *  */
-void pack_ch9329_data(CH9329CMD cmd, uint8_t *data, int length);
-#endif // USE_CH9329
+// Shared packed-frame buffer owned by ch932x.c; caller fills via pack_ch9329_data.
+extern uint8_t s_packed_buf[CH9329_HEADER_LEN + CH9329_MAX_PAYLOAD];
+#endif
 
 #endif // CH932X_H_
