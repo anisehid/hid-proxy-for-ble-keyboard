@@ -59,6 +59,21 @@ static int64_t s_connecting_since_us = 0;
 static esp_bd_addr_t s_failed_bda = {0};
 static int64_t s_failed_at_us = 0;
 
+// ---- web <-> hid_connect queue + discovery ring -----------------------------
+QueueHandle_t web_cmd_queue = NULL;
+
+static volatile bool s_discovery_enabled = false;
+static disc_entry_t  s_disc_ring[DISC_RING_MAX];
+static int           s_disc_count = 0;
+
+int hid_discovery_snapshot(disc_entry_t *out, int max) {
+  int n = s_disc_count < max ? s_disc_count : max;
+  if (n > 0 && out) memcpy(out, s_disc_ring, sizeof(disc_entry_t) * n);
+  return n;
+}
+
+bool hid_discovery_is_enabled(void) { return s_discovery_enabled; }
+
 void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
                    void *event_data) {
   esp_hidh_event_t event = (esp_hidh_event_t)id;
@@ -164,6 +179,34 @@ void hid_connect(void *pvParameters) {
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(400));
 
+    // Drain web command queue at top of loop.
+    if (web_cmd_queue) {
+      web_cmd_t cmd;
+      while (xQueueReceive(web_cmd_queue, &cmd, 0) == pdTRUE) {
+        switch (cmd.kind) {
+        case WEB_CMD_START_DISCOVERY:
+          s_discovery_enabled = true;
+          s_disc_count = 0;
+          break;
+        case WEB_CMD_STOP_DISCOVERY:
+          s_discovery_enabled = false;
+          s_disc_count = 0;
+          break;
+        case WEB_CMD_CONNECT: {
+          esp_hid_scan_result_t fake = {0};
+          memcpy(fake.bda, cmd.bda, 6);
+          fake.transport = ESP_HID_TRANSPORT_BLE;
+          fake.ble.addr_type = cmd.addr_type;
+          connect_hid_dev(&fake);
+          break;
+        }
+        case WEB_CMD_SHUTDOWN_AP:
+          // handled in Task 12
+          break;
+        }
+      }
+    }
+
 #ifdef DEBUG_HEAP
     static int64_t s_last_heap_log_us = 0;
     int64_t heap_now = esp_timer_get_time();
@@ -211,8 +254,30 @@ void hid_connect(void *pvParameters) {
         print_esp_hid_scan_results(r);
 
         if (saved_count > 0 && !device_store_contains(r->bda)) {
-          // Not a saved device. In Task 11 we'll honor a "discovery"
-          // toggle; for now (RELAY only) ignore unsaved candidates.
+          // Not a saved device. If admin+discovery is enabled, surface to
+          // the discovery ring (deduplicated by MAC) so the web UI can list it.
+          if (s_discovery_enabled &&
+              runtime_mode_get() == RUNTIME_MODE_ADMIN) {
+            bool found = false;
+            for (int i = 0; i < s_disc_count; ++i) {
+              if (memcmp(s_disc_ring[i].bda, r->bda, 6) == 0) {
+                s_disc_ring[i].rssi = r->rssi;
+                s_disc_ring[i].seen_at_us = esp_timer_get_time();
+                found = true;
+                break;
+              }
+            }
+            if (!found && s_disc_count < DISC_RING_MAX) {
+              disc_entry_t *e = &s_disc_ring[s_disc_count++];
+              memcpy(e->bda, r->bda, 6);
+              e->addr_type = r->ble.addr_type;
+              e->rssi = r->rssi;
+              size_t nlen = strnlen(r->name, sizeof e->name - 1);
+              memcpy(e->name, r->name, nlen);
+              e->name[nlen] = '\0';
+              e->seen_at_us = esp_timer_get_time();
+            }
+          }
           r = r->next;
           continue;
         }
@@ -298,6 +363,7 @@ static bool disconnect_device() {
 
 void app_main(void) {
   ESP_ERROR_CHECK(init());
+  web_cmd_queue = xQueueCreate(4, sizeof(web_cmd_t));
   xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL);
   xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL);
 
