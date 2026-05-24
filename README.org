@@ -42,6 +42,35 @@ Host-side unit tests for the pure helpers (=ch9329_pack=, =led_duty=) build with
 cd test/host && cmake -B build && cmake --build build && ./build/run_tests
 #+end_src
 
+* Web Admin UI
+
+The proxy has a triggered Wi-Fi soft-AP that hosts a small admin web UI.
+
+Triple-tap the boot button (IO9) to enter ADMIN mode. The LED switches to a
+double-pulse-every-2s pattern. The proxy then exposes:
+
+- SSID =hidproxy-XXXX= where =XXXX= is the last 4 hex digits of the MAC.
+- WPA2 password = last 8 hex digits of the MAC (printed on serial each boot).
+- Web UI at =http://192.168.4.1=.
+
+On first connect the UI prompts you to set an admin password (≥8 chars).
+Subsequent connects show a login form.
+
+Inside the UI you can:
+- See and remove saved keyboards (up to 5).
+- Enable "Discover new keyboards" to surface unsaved nearby BLE keyboards;
+  click Connect to pair.
+- Shut down the AP manually or trigger a factory reset.
+
+ADMIN auto-shuts off after 10 minutes idle.
+
+Button gestures:
+
+| Gesture        | Action                                       |
+| Hold ~1s       | Forget the currently-connected keyboard      |
+| Hold ~5s       | Factory reset (wipe NVS, bonds, password)    |
+| Triple-tap     | Enter ADMIN mode                             |
+
 * Usage
 - *Connect to new device*: if no device is stored, esp32c3 will start scanning available keyboards, and led will turn into rapid blink mode. The scanning may take a few seconds. After connecting to the first scanned device, led will tuen into off mode. And the connected device is stored.
 - *Connect to known device*: If no device is connected and there exists a bluetooth device address (esp_bd_addr_t) stored in esp32c3's nvs_flash. The LED will try scan this recorded device, and tune led into slow blink mode.
