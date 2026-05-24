@@ -383,6 +383,9 @@ static void admin_idle_task(void *_) {
 
 void app_main(void) {
   ESP_ERROR_CHECK(init());
+  // Print the Wi-Fi admin AP credentials right after init so they're easy to
+  // find in the serial log without scrolling through Bluedroid noise.
+  wifi_ap_print_banner();
   web_cmd_queue = xQueueCreate(4, sizeof(web_cmd_t));
   xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL);
   xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL);
