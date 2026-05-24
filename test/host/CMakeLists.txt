@@ -10,7 +10,8 @@ set(VENDOR_DIR ${CMAKE_SOURCE_DIR}/vendor)
 
 add_executable(run_tests
     runner.c
-    test_smoke.c
+    test_ch9329_pack.c
+    ${MAIN_DIR}/ch9329_pack.c
     ${VENDOR_DIR}/unity.c
 )
 
