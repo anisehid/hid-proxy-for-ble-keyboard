@@ -23,6 +23,7 @@
 #include "esp_gatts_api.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -33,17 +34,25 @@
 #include "esp_hidh.h"
 #include "storage.h"
 
-#define BLE_STATUS_CONNECTED 1
-#define BLE_STATUS_SCAN 2
+#define BLE_STATUS_CONNECTED  1
+#define BLE_STATUS_SCAN       2
+#define BLE_STATUS_CONNECTING 3
 
-#define BLE_CONNECTED_LED_MODE LED_MODE_OFF
-#define BLE_SCAN_NEW_LED_MODE LED_MODE_FAST_BLINK
-#define BLE_SCAN_SAVED_LED_MODE LED_MODE_SLOW_BLINK
-#define BLE_UNSET_LED_MODE LED_MODE_ALWAYS_ON
+#define BLE_CONNECTED_LED_MODE   LED_MODE_OFF
+#define BLE_SCAN_NEW_LED_MODE    LED_MODE_FAST_BLINK
+#define BLE_SCAN_SAVED_LED_MODE  LED_MODE_SLOW_BLINK
+#define BLE_UNSET_LED_MODE       LED_MODE_ALWAYS_ON
+
+#define CONNECT_TIMEOUT_US        (10LL * 1000 * 1000)
+#define FAILED_DEVICE_BACKOFF_US  (30LL * 1000 * 1000)
 
 static const char *TAG = "ESP_HIDH_DEMO";
 static esp_hidh_dev_t *connected_dev = NULL;
 static EspBleStatus ble_status;
+
+static int64_t s_connecting_since_us = 0;
+static esp_bd_addr_t s_failed_bda = {0};
+static int64_t s_failed_at_us = 0;
 
 void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
                    void *event_data) {
@@ -57,10 +66,19 @@ void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
       ESP_LOGI(TAG, ESP_BD_ADDR_STR " OPEN: %s", ESP_BD_ADDR_HEX(bda),
                esp_hidh_dev_name_get(param->open.dev));
       esp_hidh_dev_dump(param->open.dev, stdout);
+
+      save_ble_device((uint8_t *)bda);
+      set_led_mode(BLE_CONNECTED_LED_MODE);
       ble_status.status = BLE_STATUS_CONNECTED;
       connected_dev = param->open.dev;
     } else {
-      ESP_LOGE(TAG, " OPEN failed!");
+      const uint8_t *bda = esp_hidh_dev_bda_get(param->open.dev);
+      ESP_LOGE(TAG, ESP_BD_ADDR_STR " OPEN failed: status=0x%x",
+               ESP_BD_ADDR_HEX(bda), param->open.status);
+      memcpy(s_failed_bda, bda, sizeof(esp_bd_addr_t));
+      s_failed_at_us = esp_timer_get_time();
+      esp_hidh_dev_free(param->open.dev);
+      ble_status.status = BLE_STATUS_SCAN;
     }
     break;
   }
@@ -118,28 +136,35 @@ void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
 #define SCAN_DURATION_SECONDS 5
 
 static bool connect_hid_dev(esp_hid_scan_result_t *cr) {
-  if (!save_ble_device(cr->bda)) {
-    ESP_LOGE(TAG, "SAVE BLE DRIVER FAILED");
-    return false;
-  }
-
-  set_led_mode(BLE_CONNECTED_LED_MODE);
   esp_hidh_dev_t *dev =
       esp_hidh_dev_open(cr->bda, cr->transport, cr->ble.addr_type);
-
-  if (dev != NULL) {
-    ESP_LOGI(TAG, "CONNECT SUCCESS!");
-    return true;
+  if (dev == NULL) {
+    ESP_LOGE(TAG, "esp_hidh_dev_open returned NULL for " ESP_BD_ADDR_STR,
+             ESP_BD_ADDR_HEX(cr->bda));
+    return false;
   }
-  return false;
+  ble_status.status = BLE_STATUS_CONNECTING;
+  s_connecting_since_us = esp_timer_get_time();
+  ESP_LOGI(TAG, "CONNECTING to " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(cr->bda));
+  return true;
 }
 
 void hid_connect(void *pvParameters) {
   while (true) {
-    vTaskDelay(400);
+    vTaskDelay(pdMS_TO_TICKS(400));
+
     if (ble_status.status == BLE_STATUS_CONNECTED) {
       continue;
     }
+
+    if (ble_status.status == BLE_STATUS_CONNECTING) {
+      if ((esp_timer_get_time() - s_connecting_since_us) > CONNECT_TIMEOUT_US) {
+        ESP_LOGW(TAG, "CONNECTING timed out after 10s — back to SCAN");
+        ble_status.status = BLE_STATUS_SCAN;
+      }
+      continue;
+    }
+
     size_t results_len = 0;
     esp_hid_scan_result_t *results = NULL;
     ESP_LOGI(TAG, "SCAN...");
@@ -148,34 +173,38 @@ void hid_connect(void *pvParameters) {
     memset(addr, 0, sizeof(esp_bd_addr_t));
     bool has_con_dev = read_ble_device(addr);
     if (has_con_dev) {
-      ESP_LOGI(TAG, "FOUND SAVED BLE DEVICE: " ESP_BD_ADDR_STR ", ",
-               ESP_BD_ADDR_HEX(addr));
+      ESP_LOGI(TAG, "FOUND SAVED BLE DEVICE: " ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(addr));
       set_led_mode(BLE_SCAN_SAVED_LED_MODE);
       esp_hid_scan(SCAN_DURATION_SECONDS, &results_len, &results, addr);
     } else {
-      ESP_LOGI(TAG, "TRY CONNECT TO NEW BLE DEVICE: " ESP_BD_ADDR_STR ", ",
-               ESP_BD_ADDR_HEX(addr));
+      ESP_LOGI(TAG, "TRY CONNECT TO NEW BLE DEVICE");
       set_led_mode(BLE_SCAN_NEW_LED_MODE);
       esp_hid_scan(SCAN_DURATION_SECONDS, &results_len, &results, NULL);
     }
 
-    /// print scanned results
     ESP_LOGI(TAG, "SCAN: %u results", results_len);
     if (results_len) {
+      int64_t now = esp_timer_get_time();
       esp_hid_scan_result_t *r = results;
       while (r) {
         print_esp_hid_scan_results(r);
-        /* try open hid_dev */
-        bool con_suc = connect_hid_dev(r);
-        if (con_suc) {
-          ble_status.status = BLE_STATUS_CONNECTED;
-          ESP_LOGI(TAG, "Connect to " ESP_BD_ADDR_STR ": ",
-                   ESP_BD_ADDR_HEX(r->bda));
+
+        bool backoff_active =
+            (memcmp(r->bda, s_failed_bda, sizeof(esp_bd_addr_t)) == 0) &&
+            ((now - s_failed_at_us) < FAILED_DEVICE_BACKOFF_US);
+
+        if (backoff_active) {
+          ESP_LOGI(TAG, "Skipping " ESP_BD_ADDR_STR " (backoff)", ESP_BD_ADDR_HEX(r->bda));
+          r = r->next;
+          continue;
+        }
+
+        if (connect_hid_dev(r)) {
+          // Dispatched; wait for OPEN_EVENT to decide success/failure.
           break;
         }
         r = r->next;
       }
-      // free the results
       esp_hid_scan_results_free(results);
     }
   }
