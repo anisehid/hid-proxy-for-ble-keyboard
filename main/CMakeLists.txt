@@ -17,3 +17,8 @@ idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
                        REQUIRES esp_hid driver esp_wifi esp_netif esp_event esp_http_server
                        PRIV_REQUIRES nvs_flash mbedtls)
+
+target_add_binary_data(${COMPONENT_LIB} "web_assets/index.html" TEXT)
+target_add_binary_data(${COMPONENT_LIB} "web_assets/login.html" TEXT)
+target_add_binary_data(${COMPONENT_LIB} "web_assets/app.css"    TEXT)
+target_add_binary_data(${COMPONENT_LIB} "web_assets/app.js"     TEXT)

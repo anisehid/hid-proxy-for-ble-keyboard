@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset=utf-8><title>HID Proxy</title>
+<link rel=stylesheet href=/app.css></head>
+<body>
+<h1>HID Proxy <button id=logout style=float:right>Logout</button></h1>
+
+<h2>Status</h2>
+<div id=status class=muted>Loading…</div>
+
+<h2>Saved keyboards (<span id=savedN>0</span>/5)</h2>
+<div id=saved></div>
+
+<h2>Add keyboard</h2>
+<label class=toggle><input type=checkbox id=discT> Discover new keyboards</label>
+<div id=disc class=muted>Discovery off.</div>
+
+<h2>Admin</h2>
+<button id=shut>Shutdown AP now</button>
+<button id=reset class=danger>Factory reset</button>
+
+<script src=/app.js></script>
+</body></html>
