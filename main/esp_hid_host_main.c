@@ -229,6 +229,31 @@ void hid_connect(void *pvParameters) {
           ESP_LOGI(TAG, "DISCOVERY: OFF");
           break;
         case WEB_CMD_CONNECT: {
+          // Same-device click? Treat as no-op so we don't churn the link.
+          uint8_t cur_bda[6];
+          if (hid_connected_bda(cur_bda) &&
+              memcmp(cur_bda, cmd.bda, 6) == 0) {
+            ESP_LOGI(TAG, "WEB_CMD_CONNECT: already connected to "
+                     ESP_BD_ADDR_STR, ESP_BD_ADDR_HEX(cmd.bda));
+            break;
+          }
+          // Different device while one is live: close the current link
+          // before opening a new one. esp_hidh on ESP32-C3 only supports a
+          // single BLE HID link; without this, esp_hidh_dev_open returns
+          // NULL or the new link comes up wedged. Do NOT remove the old
+          // device from device_store - the operator just wants to switch.
+          if (esp_hidh_dev_exists(connected_dev)) {
+            ESP_LOGI(TAG, "WEB_CMD_CONNECT: closing previous "
+                     ESP_BD_ADDR_STR " before opening "
+                     ESP_BD_ADDR_STR,
+                     ESP_BD_ADDR_HEX(esp_hidh_dev_bda_get(connected_dev)),
+                     ESP_BD_ADDR_HEX(cmd.bda));
+            esp_hidh_dev_close(connected_dev);
+            ble_status.status = BLE_STATUS_SCAN;
+            // Give Bluedroid a moment to tear the link down before we try
+            // to open the next one. Empirically 500 ms is enough on C3.
+            vTaskDelay(pdMS_TO_TICKS(500));
+          }
           esp_hid_scan_result_t fake = {0};
           memcpy(fake.bda, cmd.bda, 6);
           fake.transport = ESP_HID_TRANSPORT_BLE;
