@@ -308,6 +308,13 @@ void hid_connect(void *pvParameters) {
       continue;
     }
 
+    // Web-only flow: auto-connect is disabled and the picker is opt-in, so
+    // the only reason to spend radio time on a BLE scan is when the operator
+    // explicitly enables discovery in the dashboard. Stay idle otherwise.
+    if (!(in_admin && s_discovery_enabled)) {
+      continue;
+    }
+
     size_t results_len = 0;
     esp_hid_scan_result_t *results = NULL;
     ESP_LOGI(TAG, "SCAN (admin=%d, discovery=%d, ble=%d)",
