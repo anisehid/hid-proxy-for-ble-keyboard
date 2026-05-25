@@ -1,83 +1,224 @@
+#+TITLE: HID Proxy for BLE Keyboards
 
-A hid proxy using ESP32C3 and CH9329/CH9328. ESP32C3 responds for BLE hosting, LED controling and storing connected bluetooth device addr with nvs_flash. And CH9329/CH9328 is used to simulate keyboard.
+ESP32-C3 + CH9329/CH9328 USB-HID bridge. The C3 hosts a BLE keyboard,
+relays its HID reports over UART to a CH9329/CH9328 converter, and
+exposes a Wi-Fi soft-AP with a web admin UI for picking and managing
+keyboards.
 
-This was tested on following keyboards:
-- zmk based keyboards
+Tested with: ZMK-based keyboards, Keychron K2 HE.
 
-* Features
-- hid proxy for bluetooth keyboard: Scan and connect to BLE keyboards. The code is modified based on the official example: https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/esp_hid_host
+* What it does
+  - Acts as a BLE central + HID host for a paired keyboard.
+  - Forwards every keystroke over UART as HID over the CH9329/CH9328
+    serial protocol, which the converter then emits as USB HID to the
+    downstream host computer.
+  - Boots straight into an admin Wi-Fi AP so a phone or laptop can
+    drive pairing/unpairing without any wires or buttons after the
+    initial flash.
+  - Persists up to 5 saved keyboards across reboots in NVS;
+    auto-reconnects whichever one wakes up first.
 
-  Which device will be selected:
-  1. UUID is 0x1812 while parsing with ESP_BLE_AD_TYPE_16SRV_PART
-  2. Apprearence equals to ESP_BLE_APPEARANCE_HID_KEYBOARD (0x03C1)
-  3. The first scanned device will be selected
-  4. LESC bonding (Just Works); no MITM
+* Web admin UI
 
-- Remember connected keyboard: Use nvs_flash to store one bluetooth device address. Once this is set, hid host will skip other devices.
-- LED signals to illustrate connection mode. There are three LED mode:
-  - *Rapid blink mode*: Scan for new device.
-  - *Slow blink mode*: Scan for known device.
-  - *Off*: Connected.
-- Relay the keyboard's input to CH9328/CH9329
+On every boot the proxy comes up in ADMIN mode automatically — the
+Wi-Fi soft-AP and the admin web server are live before any button
+press. The board's serial log prints a banner with the credentials:
 
-* Build and flash
-Install esp idf: https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/index.html
-
-set target to esp32c3
-
-  #+begin_src bash
-idf.py set-target esp32c3
+  #+begin_src text
+================ HID PROXY — Wi-Fi admin AP ================
+  Triple-tap the boot button (IO9) to re-enter admin if you closed it.
+  SSID: hidproxy-XXXX           (XXXX = last 2 bytes of MAC)
+  PSK : XXXXXXXX                (last 4 bytes of MAC, lowercase hex)
+  URL : http://192.168.4.1
+============================================================
   #+end_src
 
-Then, build and flash to your hid proxy. Use Ctrl-] to stop the monitor and release the port. The convenience script honors `$PORT` (defaults to `/dev/ttyUSB0`):
+** First-time setup
+  1. Connect your phone or laptop to =hidproxy-XXXX= (WPA2).
+  2. Open =http://192.168.4.1=.
+  3. Pick an admin password (≥8 chars) and submit. You're auto-logged in.
 
-#+begin_src bash
+** Subsequent visits
+
+Same SSID/PSK + same admin password (PBKDF2-SHA256, 10 000 rounds,
+16-byte salt; HMAC-SHA256 session cookie, 30 min expiry).
+
+** What the dashboard shows
+  - *Status line.* Current mode, BLE state, connected keyboard (name
+    + MAC), uptime, AP idle countdown.
+  - *Saved keyboards (N/5).* Each row shows the keyboard's name, MAC,
+    a green *online* or red *offline* badge, and a Remove button.
+  - *Add keyboard.* A "Discover new keyboards" toggle that starts a
+    BLE scan and lists nearby unsaved candidates with name, MAC,
+    RSSI, and a Connect button.
+  - *Admin.* Shutdown AP, Factory reset (wipes NVS + bonds + admin password).
+
+** Pairing a new keyboard
+  1. Put the keyboard into BLE pairing mode (Keychron: =fn + 1=
+     long-press until the slot LED fast-blinks).
+  2. Toggle *Discover new keyboards* on. The C3 starts scanning.
+  3. Within ~10 s the keyboard appears in the list. Click *Connect*.
+  4. The dashboard switches the badge to *online*; you should be able
+     to type into the downstream USB host immediately.
+  5. The keyboard is now in the saved list; it will auto-reconnect on
+     subsequent boots without any web interaction.
+
+** Switching between saved keyboards
+
+Click *Connect* on any other discovered keyboard. The firmware closes
+the current BLE link first (without removing it from the saved list),
+waits 500 ms for Bluedroid to tear down, then opens the new one.
+
+** Shutdown AP
+
+The *Shutdown AP* button stops the web server and the Wi-Fi radio but
+*keeps the BLE link alive*. Keystrokes continue flowing to USB while
+the AP is down. Re-enter ADMIN later by triple-tapping the boot
+button (it tries to re-bring-up Wi-Fi; if that fails on Bluedroid
+coex, the device reboots itself once into a clean ADMIN state).
+
+The AP also auto-shuts off after 10 minutes of dashboard inactivity.
+
+* Button gestures (boot button, IO9)
+
+| Gesture           | Action                                                     |
+|-------------------+------------------------------------------------------------|
+| Triple-tap        | Re-enter ADMIN (idempotent if already in ADMIN)            |
+| Hold ~1 s         | Disconnect + forget the currently-connected keyboard       |
+| Hold ~5 s         | Factory reset (wipes saved keyboards, BLE bonds, password) |
+
+Triple-tap is mostly useful after a manual *Shutdown AP* — it brings
+the AP back. Factory reset reboots into a fresh ADMIN with no saved
+keyboards and no admin password.
+
+The gesture state machine prints every detected tap on the serial log:
+
+  #+begin_src text
+[gesture] tap 1 held=120000 us
+[gesture] tap 2 held=110000 us
+[gesture] tap 3 held=130000 us
+[gesture] TRIPLE_TAP
+  #+end_src
+
+Useful for debugging "why isn't my triple-tap working" — if you see
+=tap 1= then =tap 4 / 5 / 6= the switch is bouncing; if you see only
+=tap 1= with long gaps you're tapping too slowly.
+
+* LED states
+
+A single status LED signals what the firmware is doing.
+
+| Pattern                          | Meaning                              |
+|----------------------------------+--------------------------------------|
+| Double pulse every 2 s           | ADMIN mode — AP up, web UI live      |
+| Off                              | A BLE keyboard is connected (relay)  |
+| Slow blink                       | Scanning for a saved keyboard        |
+| Fast blink                       | Scanning for a new keyboard          |
+
+The most useful one to remember: double-pulse-every-2s = the admin AP
+is reachable.
+
+* Connection logic
+
+  - *Initial pairing.* Strictly web-driven. The firmware never
+    auto-pairs with a keyboard you haven't explicitly clicked Connect
+    on. New keyboards reach the *Discover* picker only when you
+    toggle discovery on; they never auto-connect.
+  - *Auto-reconnect.* Saved keyboards (anything you've ever clicked
+    Connect on) auto-reconnect whenever they come back into range and
+    no other keyboard is live.
+  - *Scan gating.* The BLE radio only runs when there's something to
+    do: discovery is on (picker is open), OR a saved keyboard isn't
+    currently connected. While a keyboard is live the C3 stays quiet.
+  - *BLE filter.* The picker shows any device that advertises either
+    the HID service UUID (0x1812), the HID-keyboard appearance code
+    (0x03C1), or a local name. Many real keyboards (Keychron K2 HE)
+    advertise only the appearance or only a name, so the filter is
+    deliberately permissive — pick the one you want.
+  - *Pairing.* LE Secure Connections + bonding, Just Works (IO
+    capability NONE).
+  - *Address types.* RANDOM and PUBLIC peers both work; the dashboard
+    sends =addr_type= as a JSON int.
+
+* Storage layout
+
+NVS namespace =hidproxy_v3=, keys:
+  - =devices=        — 5 × 16 B =device_entry_t= (BDA + addr_type + 8-char name).
+  - =device_count=   — u8.
+  - =admin_pw_hash=  — 48 B (16 B salt + 32 B PBKDF2-SHA256 hash).
+  - =schema_version= — i32 (= 3).
+
+Bluedroid keeps its own bond keys in its own namespace; factory reset
+wipes both.
+
+A one-shot migration runs at boot if =hidproxy_v2= data exists.
+
+* Build and flash
+
+Install ESP-IDF 5.3.1 (see
+https://docs.espressif.com/projects/esp-idf/en/v5.3.1/esp32c3/get-started/index.html),
+then:
+
+  #+begin_src bash
+. $HOME/esp/esp-idf/export.sh    # adjust path
+idf.py set-target esp32c3
+idf.py -p /dev/ttyACM1 flash monitor
+  #+end_src
+
+The convenience wrapper honours =$PORT= (default =/dev/ttyUSB0=):
+
+  #+begin_src bash
 PORT=/dev/ttyACM1 ./build_flash_monitor.sh
-#+end_src
+  #+end_src
+
+If the port shows up but is unreadable:
+
+  #+begin_src bash
+sudo usermod -aG dialout $USER && newgrp dialout
+  #+end_src
+
+* Sdkconfig knobs that matter
+
+The defaults are tuned for this project; key non-default entries in
+=sdkconfig.defaults=:
+
+  - =CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y= — ~1.5 MB app
+    partition; needed because Wi-Fi + httpd + mbedtls + Bluedroid
+    push the binary past the 1 MB default.
+  - =CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024= — Chrome's request headers
+    plus the session cookie exceed the 512 B default.
+  - =CONFIG_BT_GATTC_NOTIF_REG_MAX=16= — many keyboards (Keychron K2
+    HE for example) register 8+ notification subscriptions; the IDF
+    default of 5 silently drops the keyboard INPUT report
+    subscription so no keystrokes flow.
 
 * Tests
-Host-side unit tests for the pure helpers (=ch9329_pack=, =led_duty=) build with plain gcc — no ESP-IDF required.
 
-#+begin_src bash
+Pure-helper unit tests (button gesture state machine, LED duty cycle,
+CH9329 packer, device store with an NVS stub, PBKDF2 / HMAC token
+mint+verify) build with plain gcc — no ESP-IDF required.
+
+  #+begin_src bash
 cd test/host && cmake -B build && cmake --build build && ./build/run_tests
-#+end_src
+  #+end_src
 
-* Web Admin UI
+Should report =43 Tests 0 Failures 0 Ignored OK=.
 
-The proxy has a triggered Wi-Fi soft-AP that hosts a small admin web UI.
+* Known limitations
 
-Triple-tap the boot button (IO9) to enter ADMIN mode. The LED switches to a
-double-pulse-every-2s pattern. The proxy then exposes:
+  - Single-radio C3 — Wi-Fi and BLE share the antenna. With discovery
+    on the BLE scan duty cycle is 25 %; that's a deliberate
+    compromise so the AP stays responsive.
+  - One concurrent BLE HID link at a time (IDF esp_hidh limit on
+    C3). Switching keyboards closes the previous link first.
+  - HTTP only (no TLS) on the admin AP — the cert/key situation on
+    embedded targets isn't worth the binary size for a local-only
+    soft-AP behind a per-device WPA2 PSK.
+  - First-pairing window is open: whoever joins the AP first can set
+    the admin password. Keep the keyboard somewhere physically secure
+    during initial setup.
 
-- SSID =hidproxy-XXXX= where =XXXX= is the last 4 hex digits of the MAC.
-- WPA2 password = last 8 hex digits of the MAC (printed on serial each boot).
-- Web UI at =http://192.168.4.1=.
+* References
 
-On first connect the UI prompts you to set an admin password (≥8 chars).
-Subsequent connects show a login form.
-
-Inside the UI you can:
-- See and remove saved keyboards (up to 5).
-- Enable "Discover new keyboards" to surface unsaved nearby BLE keyboards;
-  click Connect to pair.
-- Shut down the AP manually or trigger a factory reset.
-
-ADMIN auto-shuts off after 10 minutes idle.
-
-Button gestures:
-
-| Gesture        | Action                                       |
-| Hold ~1s       | Forget the currently-connected keyboard      |
-| Hold ~5s       | Factory reset (wipe NVS, bonds, password)    |
-| Triple-tap     | Enter ADMIN mode                             |
-
-* Usage
-- *Connect to new device*: if no device is stored, esp32c3 will start scanning available keyboards, and led will turn into rapid blink mode. The scanning may take a few seconds. After connecting to the first scanned device, led will tuen into off mode. And the connected device is stored.
-- *Connect to known device*: If no device is connected and there exists a bluetooth device address (esp_bd_addr_t) stored in esp32c3's nvs_flash. The LED will try scan this recorded device, and tune led into slow blink mode.
-- *Erase known device*: Press the boot button (IO9) for at lease one second, until the led turns into rapid blink mode.
-
-* Todos
-- Storing multiple devices and swithing with an extra button
-- Support ble mouse with ch9329
-- Refactor the code to make it more robust
-- start a web server for keyboad connecting, this is useful when you have multiple keyboards or need authentication
+Originally adapted from
+https://github.com/espressif/esp-idf/tree/master/examples/bluetooth/esp_hid_host.
