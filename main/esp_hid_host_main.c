@@ -376,10 +376,14 @@ void hid_connect(void *pvParameters) {
           continue;
         }
 
-        if (connect_hid_dev(r)) {
-          // Dispatched; wait for OPEN_EVENT to decide success/failure.
-          break;
-        }
+        // RELAY auto-connect is intentionally DISABLED: keystrokes only flow
+        // after the operator explicitly hits Connect in the admin UI, even
+        // when a saved keyboard is in range. (Re-enable by uncommenting.)
+        //
+        // if (connect_hid_dev(r)) {
+        //   break;  // wait for OPEN_EVENT to decide success/failure
+        // }
+        (void)r;
         r = r->next;
       }
       esp_hid_scan_results_free(results);

@@ -1,4 +1,5 @@
 #include "button_gesture.h"
+#include <stdio.h>
 
 void gesture_init(gesture_ctx_t *ctx) {
     ctx->state          = GS_IDLE;
@@ -31,12 +32,17 @@ gesture_t gesture_step(gesture_ctx_t *ctx, int level, int64_t now_us) {
             if (held <= GESTURE_TAP_MAX_US) {
                 ctx->tap_count += 1;
                 ctx->last_tap_us = now_us;
+                printf("[gesture] tap %d held=%lld us\n",
+                       ctx->tap_count, (long long)held);
                 ctx->state       = (ctx->tap_count >= 3) ? GS_IDLE : GS_COUNTING_TAPS;
                 if (ctx->tap_count >= 3) {
                     ctx->tap_count = 0;
+                    printf("[gesture] TRIPLE_TAP\n");
                     return GESTURE_TRIPLE_TAP;
                 }
             } else {
+                printf("[gesture] press too long for tap (held=%lld us); resetting\n",
+                       (long long)held);
                 ctx->state     = GS_IDLE;
                 ctx->tap_count = 0;
             }
