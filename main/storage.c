@@ -92,13 +92,18 @@ esp_err_t storage_complete_migration(void) {
     nvs_close(h);
   }
 
-  // Stamp schema_version.
+  // Stamp schema_version. If this fails we MUST report it, otherwise the next
+  // boot re-runs the v2->v3 migration and produces duplicate entries.
   if (nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
     return ESP_FAIL;
   }
-  nvs_set_i32(h, SCHEMA_VERSION_KEY, SCHEMA_VERSION_VAL);
-  nvs_commit(h);
+  esp_err_t stamp_err = nvs_set_i32(h, SCHEMA_VERSION_KEY, SCHEMA_VERSION_VAL);
+  if (stamp_err == ESP_OK) stamp_err = nvs_commit(h);
   nvs_close(h);
+  if (stamp_err != ESP_OK) {
+    printf("storage: schema-version stamp failed: %d\n", (int)stamp_err);
+    return stamp_err;
+  }
   printf("storage: migrated to schema v%d\n", SCHEMA_VERSION_VAL);
   return ESP_OK;
 }

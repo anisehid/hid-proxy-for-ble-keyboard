@@ -94,7 +94,9 @@ static void json_escape_copy(char *dst, size_t dstcap,
 }
 
 // Naive substring lookup for "key":"value" in a tiny JSON body.
-// Sufficient for our flat single-field payloads.
+// Sufficient for our flat single-field payloads. Handles \\ \" \/ escapes
+// inside the value so that a password containing a backslash or quote
+// round-trips through init -> stored hash -> login without truncation.
 static bool json_extract_string(const char *body, const char *key,
                                 char *out, size_t outlen) {
     char needle[32];
@@ -107,7 +109,18 @@ static bool json_extract_string(const char *body, const char *key,
     if (*p != '"') return false;
     p++;
     size_t n = 0;
-    while (*p && *p != '"' && n + 1 < outlen) out[n++] = *p++;
+    while (*p && n + 1 < outlen) {
+        if (*p == '\\' && p[1] != 0) {
+            char c = p[1];
+            if (c == '"' || c == '\\' || c == '/') {
+                out[n++] = c;
+                p += 2;
+                continue;
+            }
+        }
+        if (*p == '"') break;
+        out[n++] = *p++;
+    }
     out[n] = 0;
     return *p == '"';
 }
@@ -165,21 +178,65 @@ static esp_err_t h_auth_state(httpd_req_t *req) {
     return send_json(req, 200, body);
 }
 
+// Shared sliding-window failure record for /api/auth/{init,login}.
+// Both endpoints accept a password; an attacker spamming either path is the
+// same threat, so a single shared bucket gives the cleanest rate limit.
+// Slots default to 0, which means "never used"; skip those so that fresh
+// boots aren't locked out for the first 60 s after start-up.
+static int64_t s_auth_fail_us[5] = {0};
+
+static bool auth_rate_limited(httpd_req_t *req) {
+    int64_t now = esp_timer_get_time();
+    int recent = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (s_auth_fail_us[i] != 0 &&
+            now - s_auth_fail_us[i] < 60LL * 1000 * 1000) recent++;
+    }
+    if (recent >= 5) {
+        httpd_resp_set_hdr(req, "Retry-After", "60");
+        return true;
+    }
+    return false;
+}
+
+static void auth_record_failure(void) {
+    int64_t now = esp_timer_get_time();
+    int oldest = 0;
+    for (int i = 1; i < 5; ++i) {
+        if (s_auth_fail_us[i] < s_auth_fail_us[oldest]) oldest = i;
+    }
+    s_auth_fail_us[oldest] = now;
+}
+
 static esp_err_t h_auth_init(httpd_req_t *req) {
-    if (storage_admin_pw_is_set()) return send_json(req, 409, "{\"error\":\"already_set\"}");
+    if (auth_rate_limited(req)) return send_json(req, 429, "{\"error\":\"too_many\"}");
+    if (storage_admin_pw_is_set()) {
+        auth_record_failure();
+        return send_json(req, 409, "{\"error\":\"already_set\"}");
+    }
     char body[128]; size_t blen = 0;
-    if (!body_read(req, body, sizeof body, &blen))
+    if (!body_read(req, body, sizeof body, &blen)) {
+        auth_record_failure();
         return send_json(req, 400, "{\"error\":\"bad_body\"}");
+    }
     char pw[64];
-    if (!json_extract_string(body, "password", pw, sizeof pw))
+    if (!json_extract_string(body, "password", pw, sizeof pw)) {
+        auth_record_failure();
         return send_json(req, 400, "{\"error\":\"no_password\"}");
-    if (strlen(pw) < 8) return send_json(req, 400, "{\"error\":\"too_short\"}");
+    }
+    if (strlen(pw) < 8) {
+        auth_record_failure();
+        return send_json(req, 400, "{\"error\":\"too_short\"}");
+    }
 
     uint8_t salt[WEB_AUTH_SALT_LEN];
     esp_fill_random(salt, sizeof salt);
     uint8_t stored[WEB_AUTH_STORED_LEN];
     web_auth_hash_password(pw, salt, stored);
-    if (!storage_admin_pw_set(stored)) return send_json(req, 500, "{\"error\":\"nvs\"}");
+    if (!storage_admin_pw_set(stored)) {
+        auth_record_failure();
+        return send_json(req, 500, "{\"error\":\"nvs\"}");
+    }
 
     // Issue a session immediately.
     uint8_t nonce[16];
@@ -193,40 +250,29 @@ static esp_err_t h_auth_init(httpd_req_t *req) {
 }
 
 static esp_err_t h_auth_login(httpd_req_t *req) {
-    // Global sliding-window rate limit: <=5 failed attempts in the last 60 s.
-    // (Implementing it per-IP requires lwip socket plumbing that esp_http_server
-    // doesn't expose stably; for a soft-AP with at most a handful of clients
-    // the global bucket gives the same brute-force protection.)
-    // Slots default to 0, which means "never used"; skip those so that fresh
-    // boots aren't locked out for the first 60 s after start-up.
-    static int64_t fail_times_us[5] = {0};
-    int64_t now = esp_timer_get_time();
-    int recent = 0;
-    for (int i = 0; i < 5; ++i) {
-        if (fail_times_us[i] != 0 &&
-            now - fail_times_us[i] < 60LL * 1000 * 1000) recent++;
-    }
-    if (recent >= 5) {
-        httpd_resp_set_hdr(req, "Retry-After", "60");
-        return send_json(req, 429, "{\"error\":\"too_many\"}");
-    }
+    // Single shared bucket with /api/auth/init so an attacker can't pivot
+    // between the two endpoints to dodge the throttle. Every failed code path
+    // (parse error, missing field, uninitialised, bad password) increments
+    // the bucket — otherwise an oversized body could probe at wire speed.
+    if (auth_rate_limited(req)) return send_json(req, 429, "{\"error\":\"too_many\"}");
 
     char body[128]; size_t blen = 0;
-    if (!body_read(req, body, sizeof body, &blen))
+    if (!body_read(req, body, sizeof body, &blen)) {
+        auth_record_failure();
         return send_json(req, 400, "{\"error\":\"bad_body\"}");
+    }
     char pw[64];
-    if (!json_extract_string(body, "password", pw, sizeof pw))
+    if (!json_extract_string(body, "password", pw, sizeof pw)) {
+        auth_record_failure();
         return send_json(req, 400, "{\"error\":\"no_password\"}");
+    }
     uint8_t stored[WEB_AUTH_STORED_LEN];
-    if (!storage_admin_pw_get(stored))
+    if (!storage_admin_pw_get(stored)) {
+        auth_record_failure();
         return send_json(req, 401, "{\"error\":\"not_initialized\"}");
+    }
     if (!web_auth_verify_password(pw, stored)) {
-        // Record failure in the oldest slot.
-        int oldest = 0;
-        for (int i = 1; i < 5; ++i) {
-            if (fail_times_us[i] < fail_times_us[oldest]) oldest = i;
-        }
-        fail_times_us[oldest] = now;
+        auth_record_failure();
         return send_json(req, 401, "{\"error\":\"bad_password\"}");
     }
     uint8_t nonce[16];
@@ -466,6 +512,14 @@ esp_err_t web_server_start(void) {
         ESP_LOGE(TAG, "httpd_start failed");
         return ESP_FAIL;
     }
+    // Macro that surfaces a failed handler registration in the log instead of
+    // silently 404-ing for the rest of the session.
+    #define REGISTER(srv, u) do {                                              \
+        esp_err_t _rr = httpd_register_uri_handler(srv, u);                    \
+        if (_rr != ESP_OK)                                                     \
+            ESP_LOGE(TAG, "register %s %d failed: %d",                         \
+                     (u)->uri, (int)(u)->method, _rr);                         \
+    } while (0)
     static const httpd_uri_t routes[] = {
         {.uri="/api/auth/state",  .method=HTTP_GET,  .handler=h_auth_state},
         {.uri="/api/auth/init",   .method=HTTP_POST, .handler=h_auth_init},
@@ -473,7 +527,7 @@ esp_err_t web_server_start(void) {
         {.uri="/api/auth/logout", .method=HTTP_POST, .handler=h_auth_logout},
     };
     for (size_t i = 0; i < sizeof routes / sizeof routes[0]; ++i) {
-        httpd_register_uri_handler(g_server, &routes[i]);
+        REGISTER(g_server, &routes[i]);
     }
     static const httpd_uri_t more[] = {
         {.uri="/api/status",    .method=HTTP_GET,    .handler=h_status},
@@ -481,7 +535,7 @@ esp_err_t web_server_start(void) {
         {.uri="/api/devices/*", .method=HTTP_DELETE, .handler=h_devices_delete},
     };
     for (size_t i = 0; i < sizeof more / sizeof more[0]; ++i) {
-        httpd_register_uri_handler(g_server, &more[i]);
+        REGISTER(g_server, &more[i]);
     }
     static const httpd_uri_t more2[] = {
         {.uri="/api/discovery",       .method=HTTP_GET,  .handler=h_discovery_get},
@@ -489,14 +543,14 @@ esp_err_t web_server_start(void) {
         {.uri="/api/devices/connect", .method=HTTP_POST, .handler=h_connect},
     };
     for (size_t i = 0; i < sizeof more2 / sizeof more2[0]; ++i) {
-        httpd_register_uri_handler(g_server, &more2[i]);
+        REGISTER(g_server, &more2[i]);
     }
     static const httpd_uri_t more3[] = {
         {.uri="/api/admin/shutdown_ap",   .method=HTTP_POST, .handler=h_shutdown_ap},
         {.uri="/api/admin/factory_reset", .method=HTTP_POST, .handler=h_factory_reset},
     };
     for (size_t i = 0; i < sizeof more3 / sizeof more3[0]; ++i) {
-        httpd_register_uri_handler(g_server, &more3[i]);
+        REGISTER(g_server, &more3[i]);
     }
     static const httpd_uri_t statics[] = {
         {.uri="/",          .method=HTTP_GET, .handler=h_index},
@@ -505,7 +559,7 @@ esp_err_t web_server_start(void) {
         {.uri="/app.js",    .method=HTTP_GET, .handler=h_js},
     };
     for (size_t i = 0; i < sizeof statics / sizeof statics[0]; ++i) {
-        httpd_register_uri_handler(g_server, &statics[i]);
+        REGISTER(g_server, &statics[i]);
     }
     touch_activity();
     ESP_LOGI(TAG, "web server up");

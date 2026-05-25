@@ -84,7 +84,11 @@ esp_err_t wifi_ap_stop(void) {
     if (!g_started) return ESP_OK;
     // Leave wifi/netif inited so a subsequent wifi_ap_start() can just call
     // esp_wifi_start() again without re-running the one-shot init paths.
-    esp_wifi_stop();
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_stop failed: %d - leaving g_started set", err);
+        return err;
+    }
     ESP_LOGI(TAG, "AP down");
     g_started = false;
     return ESP_OK;
