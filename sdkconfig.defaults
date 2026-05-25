@@ -16,3 +16,8 @@ CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 # Chrome sends ~700-900 B of request headers (Sec-Ch-Ua-*, User-Agent, Cookie);
 # default 512 trips a 431 once the 80-hex-char session cookie is added.
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+# Keychron K2 HE and other BLE keyboards register 8+ INPUT-report CCC
+# notifications (boot kbd, NKRO kbd, mouse, consumer, generic, battery).
+# IDF's default of 5 silently drops the extras; without the keyboard
+# INPUT CCC, no keys reach the host. Headroom for multi-device futures.
+CONFIG_BT_GATTC_NOTIF_REG_MAX=16
