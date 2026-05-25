@@ -235,9 +235,15 @@ handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst) {
   }
   GAP_DBG_PRINTF("\n");
 
-  if (uuid == ESP_GATT_UUID_HID_SVC &&
-      appearance == ESP_BLE_APPEARANCE_HID_KEYBOARD) {
-    // add result if no stored addr is given
+  // Real-world keyboards often advertise EITHER the HID service UUID OR the
+  // HID-keyboard appearance, but not both. Match if either is present so the
+  // admin picker actually sees them (e.g. Keychron K2 HE advertises
+  // APPEARANCE=0x03c1 but no UUID in its adv data). RELAY auto-connect is
+  // unaffected because it gates on device_store_contains(bda) anyway.
+  bool looks_like_kbd =
+      (uuid == ESP_GATT_UUID_HID_SVC) ||
+      (appearance == ESP_BLE_APPEARANCE_HID_KEYBOARD);
+  if (looks_like_kbd) {
     if (stored_addr == NULL ||
         memcmp(stored_addr, scan_rst->bda, ESP_BD_ADDR_LEN) == 0) {
       GAP_DBG_PRINTF("ADD THIS ADDR!!\n");
