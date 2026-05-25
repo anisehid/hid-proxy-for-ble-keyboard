@@ -8,6 +8,7 @@
 
 static const char *TAG = "WIFI_AP";
 static bool g_started = false;
+static bool g_inited  = false;
 static esp_netif_t *g_netif = NULL;
 
 void wifi_ap_get_credentials(char *ssid, size_t ssid_len,
@@ -41,11 +42,17 @@ esp_err_t wifi_ap_start(void) {
     char pass[16];
     wifi_ap_get_credentials(ssid, sizeof ssid, pass, sizeof pass);
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    if (g_netif == NULL) g_netif = esp_netif_create_default_wifi_ap();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    // esp_netif_init() is not idempotent in 5.3.1 — calling it a second time
+    // returns ESP_ERR_INVALID_STATE which ESP_ERROR_CHECK turns into an abort.
+    // Same story for esp_netif_create_default_wifi_ap() and esp_wifi_init().
+    // Do them exactly once across the lifetime of the firmware.
+    if (!g_inited) {
+        ESP_ERROR_CHECK(esp_netif_init());
+        g_netif = esp_netif_create_default_wifi_ap();
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        g_inited = true;
+    }
 
     wifi_config_t wcfg = {0};
     wcfg.ap.channel = 6;
@@ -75,8 +82,9 @@ esp_err_t wifi_ap_start(void) {
 
 esp_err_t wifi_ap_stop(void) {
     if (!g_started) return ESP_OK;
+    // Leave wifi/netif inited so a subsequent wifi_ap_start() can just call
+    // esp_wifi_start() again without re-running the one-shot init paths.
     esp_wifi_stop();
-    esp_wifi_deinit();
     ESP_LOGI(TAG, "AP down");
     g_started = false;
     return ESP_OK;
