@@ -235,15 +235,18 @@ handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst) {
   }
   GAP_DBG_PRINTF("\n");
 
-  // Real-world keyboards often advertise EITHER the HID service UUID OR the
-  // HID-keyboard appearance, but not both. Match if either is present so the
-  // admin picker actually sees them (e.g. Keychron K2 HE advertises
-  // APPEARANCE=0x03c1 but no UUID in its adv data). RELAY auto-connect is
-  // unaffected because it gates on device_store_contains(bda) anyway.
-  bool looks_like_kbd =
+  // BLE advertisements only carry two reliable "I'm a keyboard" signals: the
+  // HID service UUID and the HID_KEYBOARD appearance code. Plenty of real
+  // keyboards send neither (e.g. cheap clones, or devices that only expose
+  // HID over GATT after connection). To let the admin picker actually
+  // surface those, also accept any device that advertises a name — the
+  // operator can then decide whether to try connecting. RELAY auto-connect
+  // is unaffected because it gates on device_store_contains(bda).
+  bool worth_showing =
       (uuid == ESP_GATT_UUID_HID_SVC) ||
-      (appearance == ESP_BLE_APPEARANCE_HID_KEYBOARD);
-  if (looks_like_kbd) {
+      (appearance == ESP_BLE_APPEARANCE_HID_KEYBOARD) ||
+      (adv_name_len > 0);
+  if (worth_showing) {
     if (stored_addr == NULL ||
         memcmp(stored_addr, scan_rst->bda, ESP_BD_ADDR_LEN) == 0) {
       GAP_DBG_PRINTF("ADD THIS ADDR!!\n");
