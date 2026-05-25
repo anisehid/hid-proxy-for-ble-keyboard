@@ -57,8 +57,13 @@ static esp_err_t send_json(httpd_req_t *req, int code, const char *json) {
 static bool body_read(httpd_req_t *req, char *buf, size_t buflen, size_t *out_len) {
     int total = req->content_len;
     if (total < 0 || (size_t)total >= buflen) return false;
-    int got = httpd_req_recv(req, buf, total);
-    if (got != total) return false;
+    int got = 0;
+    while (got < total) {
+        int n = httpd_req_recv(req, buf + got, total - got);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) return false;
+        got += n;
+    }
     buf[got] = 0;
     *out_len = (size_t)got;
     return true;
@@ -98,9 +103,16 @@ static bool read_session_cookie(httpd_req_t *req, uint8_t token[WEB_AUTH_TOKEN_L
     char cookie[256];
     if (httpd_req_get_hdr_value_str(req, "Cookie", cookie, sizeof cookie) != ESP_OK)
         return false;
-    char *p = strstr(cookie, COOKIE_NAME "=");
-    if (!p) return false;
-    p += strlen(COOKIE_NAME "=");
+    // Find COOKIE_NAME="..." with a proper name boundary so "Xhp_session=..." doesn't match.
+    const char *needle = COOKIE_NAME "=";
+    char *p = cookie;
+    for (;;) {
+        p = strstr(p, needle);
+        if (!p) return false;
+        if (p == cookie || p[-1] == ';' || p[-1] == ' ') break;
+        p++;
+    }
+    p += strlen(needle);
     char *end = strchr(p, ';');
     size_t len = end ? (size_t)(end - p) : strlen(p);
     if (len != WEB_AUTH_TOKEN_LEN * 2) return false;
@@ -161,11 +173,14 @@ static esp_err_t h_auth_login(httpd_req_t *req) {
     // (Implementing it per-IP requires lwip socket plumbing that esp_http_server
     // doesn't expose stably; for a soft-AP with at most a handful of clients
     // the global bucket gives the same brute-force protection.)
+    // Slots default to 0, which means "never used"; skip those so that fresh
+    // boots aren't locked out for the first 60 s after start-up.
     static int64_t fail_times_us[5] = {0};
     int64_t now = esp_timer_get_time();
     int recent = 0;
     for (int i = 0; i < 5; ++i) {
-        if (now - fail_times_us[i] < 60LL * 1000 * 1000) recent++;
+        if (fail_times_us[i] != 0 &&
+            now - fail_times_us[i] < 60LL * 1000 * 1000) recent++;
     }
     if (recent >= 5) {
         httpd_resp_set_hdr(req, "Retry-After", "60");
@@ -388,7 +403,11 @@ static esp_err_t h_factory_reset(httpd_req_t *req) {
 static esp_err_t serve_static(httpd_req_t *req, const char *mime,
                               const uint8_t *start, const uint8_t *end) {
     httpd_resp_set_type(req, mime);
-    return httpd_resp_send(req, (const char *)start, end - start);
+    // Assets are embedded with target_add_binary_data(... TEXT), which appends a
+    // trailing NUL; _binary_*_end points past it. Drop that byte from the wire.
+    size_t len = (size_t)(end - start);
+    if (len > 0 && start[len - 1] == '\0') len--;
+    return httpd_resp_send(req, (const char *)start, len);
 }
 
 static esp_err_t h_index(httpd_req_t *req) {
