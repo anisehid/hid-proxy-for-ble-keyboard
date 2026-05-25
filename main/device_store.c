@@ -1,4 +1,5 @@
 #include "device_store.h"
+#include <stdio.h>
 #include <string.h>
 
 #define NS_V3 "hidproxy_v3"
@@ -49,11 +50,12 @@ static int load(device_entry_t *buf, uint8_t *out_count) {
 static int save(const device_entry_t *buf, uint8_t count) {
     void *h = NULL;
     if (g_ops->open(NS_V3, &h) != 0) return -1;
-    g_ops->set_blob(h, K_DEVICES, buf, sizeof(device_entry_t) * DEVICE_STORE_MAX);
-    g_ops->set_u8(h, K_COUNT, count);
-    g_ops->commit(h);
+    int rc = g_ops->set_blob(h, K_DEVICES, buf,
+                             sizeof(device_entry_t) * DEVICE_STORE_MAX);
+    if (rc == 0) rc = g_ops->set_u8(h, K_COUNT, count);
+    if (rc == 0) rc = g_ops->commit(h);
     g_ops->close(h);
-    return 0;
+    return rc;
 }
 
 bool device_store_upsert(const device_entry_t *entry) {
@@ -108,10 +110,14 @@ bool device_store_contains(const uint8_t bda[6]) {
 void device_store_clear(void) {
     if (!g_ops) return;
     void *h = NULL;
-    if (g_ops->open(NS_V3, &h) != 0) return;
-    g_ops->erase_all(h);
-    g_ops->commit(h);
+    if (g_ops->open(NS_V3, &h) != 0) {
+        fprintf(stderr, "device_store_clear: nvs open failed\n");
+        return;
+    }
+    int rc = g_ops->erase_all(h);
+    if (rc == 0) rc = g_ops->commit(h);
     g_ops->close(h);
+    if (rc != 0) fprintf(stderr, "device_store_clear: erase/commit rc=%d\n", rc);
 }
 
 void device_store_migrate_from_v2(void) {

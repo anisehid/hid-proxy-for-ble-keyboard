@@ -429,9 +429,13 @@ void app_main(void) {
   // find in the serial log without scrolling through Bluedroid noise.
   wifi_ap_print_banner();
   web_cmd_queue = xQueueCreate(4, sizeof(web_cmd_t));
-  xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL);
-  xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL);
-  xTaskCreate(&admin_idle_task, "admin_idle", 2048, NULL, 1, NULL);
+  configASSERT(web_cmd_queue);
+  // If any of these task creations fail (OOM), the device is in a totally
+  // unusable state — assert loudly rather than continue with a half-booted
+  // BLE/HID/admin task topology.
+  configASSERT(xTaskCreate(&change_led, "change_led", 2048, NULL, 2, NULL) == pdPASS);
+  configASSERT(xTaskCreate(&hid_connect, "hid_connect", 8 * 1024, NULL, 2, NULL) == pdPASS);
+  configASSERT(xTaskCreate(&admin_idle_task, "admin_idle", 2048, NULL, 1, NULL) == pdPASS);
 
   gesture_ctx_t gctx;
   gesture_init(&gctx);
