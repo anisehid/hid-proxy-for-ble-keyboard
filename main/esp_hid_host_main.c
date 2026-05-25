@@ -489,6 +489,17 @@ void app_main(void) {
   };
   gpio_config(&io);
 
+  // Boot directly into ADMIN: every fresh boot is "no connection" by
+  // definition (auto-open is disabled), so the operator needs the AP up
+  // to be able to pick a keyboard. Mirrors the GESTURE_TRIPLE_TAP handler.
+  ESP_LOGI(TAG, "Boot: entering ADMIN mode (no connection yet)");
+  runtime_mode_set(RUNTIME_MODE_ADMIN);
+  set_led_mode(LED_MODE_ADMIN);
+  esp_event_loop_create_default();
+  if (wifi_ap_start() == ESP_OK) {
+    web_server_start();
+  }
+
   while (true) {
     int level = gpio_get_level(BOOT_MODE_PIN);
     gesture_t g = gesture_step(&gctx, level, esp_timer_get_time());
