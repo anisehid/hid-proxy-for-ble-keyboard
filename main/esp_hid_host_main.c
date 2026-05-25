@@ -175,6 +175,14 @@ void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,
     ESP_LOGI(TAG, ESP_BD_ADDR_STR " CLOSE: %s", ESP_BD_ADDR_HEX(bda),
              esp_hidh_dev_name_get(param->close.dev));
     ble_status.status = BLE_STATUS_SCAN;
+    if (runtime_mode_get() != RUNTIME_MODE_ADMIN) {
+      ESP_LOGI(TAG, "BLE link dropped, bringing AP back up");
+      runtime_mode_set(RUNTIME_MODE_ADMIN);
+      set_led_mode(LED_MODE_ADMIN);
+      esp_event_loop_create_default();
+      if (wifi_ap_start() == ESP_OK) web_server_start();
+    }
+
     break;
   }
   default:
