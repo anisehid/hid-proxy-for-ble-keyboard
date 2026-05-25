@@ -13,3 +13,6 @@ CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
 CONFIG_LWIP_LOCAL_HOSTNAME="hidproxy"
 CONFIG_PARTITION_TABLE_SINGLE_APP=n
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# Chrome sends ~700-900 B of request headers (Sec-Ch-Ua-*, User-Agent, Cookie);
+# default 512 trips a 431 once the 80-hex-char session cookie is added.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
