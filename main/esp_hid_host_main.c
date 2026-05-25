@@ -312,10 +312,15 @@ void hid_connect(void *pvParameters) {
       continue;
     }
 
-    // Web-only flow: auto-connect is disabled and the picker is opt-in, so
-    // the only reason to spend radio time on a BLE scan is when the operator
-    // explicitly enables discovery in the dashboard. Stay idle otherwise.
-    if (!(in_admin && s_discovery_enabled)) {
+    // Scan when (a) the dashboard has discovery toggled on (picker) OR
+    // (b) we have a saved keyboard that isn't currently connected (so we
+    // can auto-reconnect when it wakes from sleep). Otherwise stay idle.
+    device_entry_t saved_pre[DEVICE_STORE_MAX];
+    int saved_pre_count = device_store_list(saved_pre);
+    bool want_discovery = in_admin && s_discovery_enabled;
+    bool want_reconnect = (ble_status.status == BLE_STATUS_SCAN) &&
+                          (saved_pre_count > 0);
+    if (!want_discovery && !want_reconnect) {
       continue;
     }
 
@@ -395,14 +400,14 @@ void hid_connect(void *pvParameters) {
           continue;
         }
 
-        // RELAY auto-connect is intentionally DISABLED: keystrokes only flow
-        // after the operator explicitly hits Connect in the admin UI, even
-        // when a saved keyboard is in range. (Re-enable by uncommenting.)
-        //
-        // if (connect_hid_dev(r)) {
-        //   break;  // wait for OPEN_EVENT to decide success/failure
-        // }
-        (void)r;
+        // Auto-reconnect to SAVED keyboards only. Unsaved devices reach this
+        // loop too (via the relaxed scan filter) but are intercepted earlier
+        // - they only ever flow into the discovery ring for the picker, never
+        // into connect_hid_dev. So when we get here, r->bda is in the store
+        // and was added by an explicit Connect click in the past.
+        if (connect_hid_dev(r)) {
+          break;  // wait for OPEN_EVENT to decide success/failure
+        }
         r = r->next;
       }
       esp_hid_scan_results_free(results);
