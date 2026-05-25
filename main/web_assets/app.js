@@ -27,11 +27,14 @@ async function tick() {
 
   try {
     const devs = await fetch('/api/devices').then(r=>r.json());
-    $('saved').innerHTML = devs.map(d=>
-      `<div class=row><span>${d.name||'(no name)'}${d.is_connected?' <b>[live]</b>':''}</span>
+    $('saved').innerHTML = devs.map(d=>{
+      const badge = d.is_connected
+        ? '<b style="color:#0a0">online</b>'
+        : '<span style="color:#a44">offline</span>';
+      return `<div class=row><span>${d.name||'(no name)'} &middot; ${badge}</span>
        <code>${d.mac}</code>
-       <button data-slot=${d.slot} class=del>Remove</button></div>`).join('') ||
-      '<div class=muted>No saved keyboards yet.</div>';
+       <button data-slot=${d.slot} class=del>Remove</button></div>`;
+    }).join('') || '<div class=muted>No saved keyboards yet.</div>';
     for (const b of document.querySelectorAll('.del')) b.onclick = async () => {
       await fetch('/api/devices/'+b.dataset.slot, {method:'DELETE'});
       tick();
