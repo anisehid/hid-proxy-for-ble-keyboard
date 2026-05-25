@@ -270,14 +270,19 @@ void hid_connect(void *pvParameters) {
           break;
         }
         case WEB_CMD_SHUTDOWN_AP:
-          // Second-time wifi_ap_start (after a stop + later triple-tap) is
-          // unreliable - the Wi-Fi/Bluedroid coex state machine doesn't
-          // round-trip cleanly on the C3 in IDF 5.3.1. Avoid that path
-          // entirely: just reboot. The boot-into-ADMIN handler in app_main
-          // brings the AP back up cleanly on the next start.
-          ESP_LOGI(TAG, "WEB_CMD_SHUTDOWN_AP: rebooting (clean re-bringup)");
-          vTaskDelay(pdMS_TO_TICKS(200));  // let the HTTP 204 flush
-          esp_restart();
+          // Graceful tear-down: stop httpd + Wi-Fi soft-AP, leave BLE link
+          // alone. Mode -> RELAY so the scan gate (re)opens for saved-only
+          // reconnect and the picker stays gated. If we later re-enter
+          // ADMIN via triple-tap and wifi_ap_start fails (Bluedroid coex
+          // sometimes wedges), the triple-tap handler does an esp_restart
+          // fallback so the device can self-recover without manual reset.
+          ESP_LOGI(TAG, "WEB_CMD_SHUTDOWN_AP: stopping httpd + Wi-Fi");
+          runtime_mode_set(RUNTIME_MODE_RELAY);
+          web_server_stop();
+          wifi_ap_stop();
+          if (ble_status.status != BLE_STATUS_CONNECTED) {
+            set_led_mode(LED_MODE_OFF);
+          }
           break;
         }
       }
@@ -545,6 +550,12 @@ void app_main(void) {
       esp_event_loop_create_default();
       if (wifi_ap_start() == ESP_OK) {
         web_server_start();
+      } else {
+        // Second-time bring-up sometimes wedges Bluedroid coex on the C3.
+        // Self-recover with a reboot so the cold-boot path runs cleanly.
+        ESP_LOGW(TAG, "wifi_ap_start failed - rebooting to recover");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
       }
       break;
     default:
