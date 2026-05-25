@@ -93,6 +93,25 @@ static void json_escape_copy(char *dst, size_t dstcap,
     dst[o] = 0;
 }
 
+// Extract an unquoted JSON integer value: "key":123. Required because
+// json_extract_string only handles quoted values and the dashboard sends
+// addr_type as a bare number (matching JSON.stringify of a JS number).
+static bool json_extract_int(const char *body, const char *key, int *out) {
+    char needle[32];
+    snprintf(needle, sizeof needle, "\"%s\"", key);
+    const char *p = strstr(body, needle);
+    if (!p) return false;
+    p = strchr(p + strlen(needle), ':');
+    if (!p) return false;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    char *endp = NULL;
+    long v = strtol(p, &endp, 10);
+    if (endp == p) return false;
+    *out = (int)v;
+    return true;
+}
+
 // Naive substring lookup for "key":"value" in a tiny JSON body.
 // Sufficient for our flat single-field payloads. Handles \\ \" \/ escapes
 // inside the value so that a password containing a backslash or quote
@@ -425,9 +444,14 @@ static esp_err_t h_connect(httpd_req_t *req) {
     if (sscanf(mac_s, "%2x:%2x:%2x:%2x:%2x:%2x",
                &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6)
         return send_json(req, 400, "{\"error\":\"bad_mac\"}");
-    // addr_type may be absent; default to public (0).
-    char at[4]; int addr_type = 0;
-    if (json_extract_string(body, "addr_type", at, sizeof at)) addr_type = atoi(at);
+    // addr_type may be absent; default to public (0). The dashboard sends it
+    // as a JSON number, so use json_extract_int (json_extract_string would
+    // silently fail on `"addr_type":1` and leave addr_type = 0, which makes
+    // RANDOM-addressed peers like Keychron unreachable).
+    int addr_type = 0;
+    json_extract_int(body, "addr_type", &addr_type);
+    ESP_LOGI(TAG, "POST /api/devices/connect mac=%02x:%02x:%02x:%02x:%02x:%02x addr_type=%d",
+             m[0], m[1], m[2], m[3], m[4], m[5], addr_type);
     web_cmd_t c = { .kind = WEB_CMD_CONNECT, .addr_type = (uint8_t)addr_type };
     for (int i = 0; i < 6; ++i) c.bda[i] = (uint8_t)m[i];
     if (!web_cmd_queue || xQueueSend(web_cmd_queue, &c, 0) != pdTRUE) {
