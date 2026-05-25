@@ -126,14 +126,21 @@ static bool json_extract_string(const char *body, const char *key,
 }
 
 static void emit_session_cookie(httpd_req_t *req, const uint8_t token[WEB_AUTH_TOKEN_LEN]) {
+    // esp_http_server keeps custom headers BY REFERENCE - the buffer must
+    // stay valid until the response is serialised on the wire. A stack-local
+    // here gets clobbered the moment we return into send_json, so the browser
+    // receives a junk cookie and bounces back to /login. esp_http_server runs
+    // a single worker task in its default config, so a file-static buffer
+    // is safe: the next handler can't start until this response has been
+    // fully written out.
+    static char s_cookie_hdr[200];
     char hex[WEB_AUTH_TOKEN_LEN*2 + 1];
     for (int i = 0; i < WEB_AUTH_TOKEN_LEN; ++i)
         snprintf(hex + i*2, 3, "%02x", token[i]);
-    char header[200];
-    snprintf(header, sizeof header,
+    snprintf(s_cookie_hdr, sizeof s_cookie_hdr,
              COOKIE_NAME "=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=1800",
              hex);
-    httpd_resp_set_hdr(req, "Set-Cookie", header);
+    httpd_resp_set_hdr(req, "Set-Cookie", s_cookie_hdr);
 }
 
 static bool read_session_cookie(httpd_req_t *req, uint8_t token[WEB_AUTH_TOKEN_LEN]) {
