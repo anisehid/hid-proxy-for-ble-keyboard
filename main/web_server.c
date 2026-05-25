@@ -69,6 +69,30 @@ static bool body_read(httpd_req_t *req, char *buf, size_t buflen, size_t *out_le
     return true;
 }
 
+// Copy up to `srcmax` bytes of `src` into `dst`, escaping the JSON-special
+// characters " and \, and dropping ASCII control bytes. Result is NUL-terminated.
+// `dstcap` must be at least 1. Truncates rather than overflowing.
+static void json_escape_copy(char *dst, size_t dstcap,
+                             const char *src, size_t srcmax) {
+    size_t o = 0;
+    if (dstcap == 0) return;
+    for (size_t i = 0; i < srcmax && src[i]; ++i) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '"' || c == '\\') {
+            if (o + 3 > dstcap) break;  // need room for \X + NUL
+            dst[o++] = '\\';
+            dst[o++] = (char)c;
+        } else if (c < 0x20) {
+            // skip control chars (BLE names sometimes have stray bytes)
+            continue;
+        } else {
+            if (o + 2 > dstcap) break;  // need room for c + NUL
+            dst[o++] = (char)c;
+        }
+    }
+    dst[o] = 0;
+}
+
 // Naive substring lookup for "key":"value" in a tiny JSON body.
 // Sufficient for our flat single-field payloads.
 static bool json_extract_string(const char *body, const char *key,
@@ -263,10 +287,12 @@ static esp_err_t h_devices_list(httpd_req_t *req) {
         if (off >= (int)sizeof body - 1) break;
         const uint8_t *m = devs[i].bda;
         bool is_connected = has_conn && memcmp(m, cbda, 6) == 0;
+        char name_esc[24];
+        json_escape_copy(name_esc, sizeof name_esc, devs[i].name, 7);
         off += snprintf(body + off, sizeof body - off,
             "%s{\"slot\":%d,\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-            "\"name\":\"%.7s\",\"is_connected\":%s}",
-            i ? "," : "", i, m[0], m[1], m[2], m[3], m[4], m[5], devs[i].name,
+            "\"name\":\"%s\",\"is_connected\":%s}",
+            i ? "," : "", i, m[0], m[1], m[2], m[3], m[4], m[5], name_esc,
             is_connected ? "true" : "false");
     }
     if (off < (int)sizeof body - 1) {
@@ -290,11 +316,13 @@ static esp_err_t h_discovery_get(httpd_req_t *req) {
     for (int i = 0; i < n; ++i) {
         if (off >= (int)sizeof body - 1) break;
         const uint8_t *m = buf[i].bda;
+        char name_esc[28];
+        json_escape_copy(name_esc, sizeof name_esc, buf[i].name, 11);
         off += snprintf(body + off, sizeof body - off,
-            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"name\":\"%.11s\","
+            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"name\":\"%s\","
             "\"rssi\":%d,\"addr_type\":%u}",
             i ? "," : "", m[0], m[1], m[2], m[3], m[4], m[5],
-            buf[i].name, buf[i].rssi, buf[i].addr_type);
+            name_esc, buf[i].rssi, buf[i].addr_type);
     }
     if (off < (int)sizeof body - 1) {
         snprintf(body + off, sizeof body - off, "]}");

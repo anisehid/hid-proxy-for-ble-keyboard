@@ -68,7 +68,10 @@ static disc_entry_t  s_disc_ring[DISC_RING_MAX];
 static int           s_disc_count = 0;
 
 int hid_discovery_snapshot(disc_entry_t *out, int max) {
-  int n = s_disc_count < max ? s_disc_count : max;
+  // Acquire load pairs with the release store in the writer above, so memcpy
+  // can't be hoisted before the count read.
+  int cur = __atomic_load_n(&s_disc_count, __ATOMIC_ACQUIRE);
+  int n = cur < max ? cur : max;
   if (n > 0 && out) memcpy(out, s_disc_ring, sizeof(disc_entry_t) * n);
   return n;
 }
@@ -304,7 +307,12 @@ void hid_connect(void *pvParameters) {
               }
             }
             if (!found && s_disc_count < DISC_RING_MAX) {
-              disc_entry_t *e = &s_disc_ring[s_disc_count++];
+              // Fully populate the slot BEFORE publishing the new count, so a
+              // concurrent hid_discovery_snapshot() reader on an httpd task
+              // never observes a half-written entry (would surface a phantom
+              // 00:00:00:00:00:00 row in the picker).
+              int idx = s_disc_count;
+              disc_entry_t *e = &s_disc_ring[idx];
               memcpy(e->bda, r->bda, 6);
               e->addr_type  = r->ble.addr_type;
               e->rssi       = r->rssi;
@@ -312,6 +320,7 @@ void hid_connect(void *pvParameters) {
               memcpy(e->name, r->name, nl);
               e->name[nl]   = 0;
               e->seen_at_us = esp_timer_get_time();
+              __atomic_store_n(&s_disc_count, idx + 1, __ATOMIC_RELEASE);
               ESP_LOGI(TAG, "DISCOVERY+ " ESP_BD_ADDR_STR " '%s' rssi=%d",
                        ESP_BD_ADDR_HEX(r->bda), e->name, r->rssi);
             }
