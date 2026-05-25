@@ -58,6 +58,11 @@ bool hid_discovery_is_enabled(void);
 // no keyboard is currently connected.
 bool hid_connected_bda(uint8_t out[6]);
 
+// Copy the currently-connected keyboard's GATT-resolved name into `out`
+// (NUL-terminated, truncated to `outlen-1`). Returns false if no keyboard is
+// connected OR the stack has no name for it yet. On false, `out[0] = 0`.
+bool hid_connected_name(char *out, size_t outlen);
+
 // Raw BLE_STATUS_* code: 0 = unknown, 1 = CONNECTED, 2 = SCAN, 3 = CONNECTING.
 int  hid_ble_status(void);
 

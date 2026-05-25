@@ -317,12 +317,21 @@ static esp_err_t h_status(httpd_req_t *req) {
             "\"%02x:%02x:%02x:%02x:%02x:%02x\"",
             cbda[0], cbda[1], cbda[2], cbda[3], cbda[4], cbda[5]);
     }
-    char body[256];
+    char raw_name[40] = {0};
+    bool has_name = hid_connected_name(raw_name, sizeof raw_name);
+    char name_field[96] = "null";
+    if (has_name) {
+        char esc[80];
+        json_escape_copy(esc, sizeof esc, raw_name, sizeof raw_name);
+        snprintf(name_field, sizeof name_field, "\"%s\"", esc);
+    }
+    char body[320];
     snprintf(body, sizeof body,
         "{\"mode\":\"%s\",\"uptime_s\":%lld,\"ap_idle_remaining_s\":%lld,"
-        "\"saved_count\":%d,\"ble_status\":%d,\"connected_device\":%s}",
+        "\"saved_count\":%d,\"ble_status\":%d,\"connected_device\":%s,"
+        "\"connected_name\":%s}",
         m == RUNTIME_MODE_ADMIN ? "admin" : "relay",
-        uptime_s, idle_remaining_s, saved_count, ble_st, conn_field);
+        uptime_s, idle_remaining_s, saved_count, ble_st, conn_field, name_field);
     ESP_LOGI(TAG, "GET /api/status -> %s", body);
     return send_json(req, 200, body);
 }
