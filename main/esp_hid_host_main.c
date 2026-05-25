@@ -86,6 +86,16 @@ bool hid_connected_bda(uint8_t out[6]) {
   return true;
 }
 
+bool hid_connected_name(char *out, size_t outlen) {
+  if (outlen == 0) return false;
+  out[0] = 0;
+  if (!connected_dev || !esp_hidh_dev_exists(connected_dev)) return false;
+  const char *name = esp_hidh_dev_name_get(connected_dev);
+  if (!name || !name[0]) return false;
+  snprintf(out, outlen, "%s", name);
+  return true;
+}
+
 int hid_ble_status(void) { return ble_status.status; }
 
 void hidh_callback(void *handler_args, esp_event_base_t base, int32_t id,

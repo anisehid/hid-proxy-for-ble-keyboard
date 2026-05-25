@@ -14,7 +14,11 @@ async function tick() {
     $('status').innerHTML = '<span style=color:#a33>Network error: '+e.message+'</span>';
     return;
   }
-  const conn = s.connected_device ? ` &middot; connected: <code>${s.connected_device}</code>` : '';
+  let conn = '';
+  if (s.connected_device) {
+    const nm = s.connected_name ? `<b>${s.connected_name}</b> ` : '';
+    conn = ` &middot; connected: ${nm}<code>${s.connected_device}</code>`;
+  }
   $('status').innerHTML =
     `Mode: <b>${s.mode}</b> &middot; BLE: <b>${BLE[s.ble_status]||s.ble_status}</b>` +
     conn +
