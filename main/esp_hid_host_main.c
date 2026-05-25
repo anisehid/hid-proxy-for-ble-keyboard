@@ -270,10 +270,14 @@ void hid_connect(void *pvParameters) {
           break;
         }
         case WEB_CMD_SHUTDOWN_AP:
-          runtime_mode_set(RUNTIME_MODE_RELAY);
-          set_led_mode(LED_MODE_OFF);
-          web_server_stop();
-          wifi_ap_stop();
+          // Second-time wifi_ap_start (after a stop + later triple-tap) is
+          // unreliable - the Wi-Fi/Bluedroid coex state machine doesn't
+          // round-trip cleanly on the C3 in IDF 5.3.1. Avoid that path
+          // entirely: just reboot. The boot-into-ADMIN handler in app_main
+          // brings the AP back up cleanly on the next start.
+          ESP_LOGI(TAG, "WEB_CMD_SHUTDOWN_AP: rebooting (clean re-bringup)");
+          vTaskDelay(pdMS_TO_TICKS(200));  // let the HTTP 204 flush
+          esp_restart();
           break;
         }
       }
